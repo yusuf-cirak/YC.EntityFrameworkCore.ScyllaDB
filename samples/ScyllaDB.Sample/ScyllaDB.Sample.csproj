@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ScyllaDB.Sample</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\YC.EntityFrameworkCore.ScyllaDB\YC.EntityFrameworkCore.ScyllaDB.csproj" />
+  </ItemGroup>
+
+</Project>

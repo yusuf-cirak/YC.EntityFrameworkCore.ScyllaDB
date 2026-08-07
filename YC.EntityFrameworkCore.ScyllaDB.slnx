@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/YC.EntityFrameworkCore.ScyllaDB/YC.EntityFrameworkCore.ScyllaDB.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/YC.EntityFrameworkCore.ScyllaDB.UnitTests/YC.EntityFrameworkCore.ScyllaDB.UnitTests.csproj" />
+    <Project Path="test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/ScyllaDB.Sample/ScyllaDB.Sample.csproj" />
+  </Folder>
+</Solution>

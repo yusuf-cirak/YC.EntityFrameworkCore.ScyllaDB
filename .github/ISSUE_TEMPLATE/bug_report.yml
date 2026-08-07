@@ -1,0 +1,56 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: model
+    attributes:
+      label: Model configuration
+      description: The entity class and its OnModelCreating configuration.
+      render: csharp
+    validations:
+      required: true
+
+  - type: textarea
+    id: query
+    attributes:
+      label: Query or SaveChanges call
+      description: The LINQ query or write that triggers it.
+      render: csharp
+
+  - type: textarea
+    id: cql
+    attributes:
+      label: Generated CQL
+      description: Output of `query.ToCqlString()`, if the issue is query-related.
+      render: sql
+
+  - type: textarea
+    id: exception
+    attributes:
+      label: Exception
+      description: Full message and stack trace.
+      render: text
+
+  - type: input
+    id: provider-version
+    attributes:
+      label: Provider version
+    validations:
+      required: true
+
+  - type: input
+    id: scylla-version
+    attributes:
+      label: ScyllaDB version
+      description: Output of `SELECT release_version FROM system.local`.
+    validations:
+      required: true

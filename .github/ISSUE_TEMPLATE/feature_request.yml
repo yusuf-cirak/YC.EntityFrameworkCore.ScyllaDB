@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The problem, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cql
+    attributes:
+      label: CQL this maps to
+      description: >
+        Which CQL feature does this need? A link to the ScyllaDB docs helps.
+        If CQL cannot express it, say so — the answer may be a better error message instead.
+      render: sql
+
+  - type: textarea
+    id: api
+    attributes:
+      label: API you would like
+      description: How you imagine calling it.
+      render: csharp

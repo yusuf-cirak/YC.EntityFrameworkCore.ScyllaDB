@@ -1,0 +1,36 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <!-- EF1001: this is a database provider, so using EF Core's "pubternal" internal APIs is the job.
+         CS1591/CS1573: ship existing XML docs without forcing docs on every member under warnings-as-errors. -->
+    <NoWarn>$(NoWarn);EF1001;CS1591;CS1573</NoWarn>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata">
+    <Authors>Yusuf Çırak</Authors>
+    <Product>YC.EntityFrameworkCore.ScyllaDB</Product>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>scylladb;scylla;cassandra;cql;entity-framework-core;efcore;provider;nosql</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Release notes: https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB/releases</PackageReleaseNotes>
+    <VersionPrefix>0.1.0</VersionPrefix><!-- x-release-please-version -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Projects opt in explicitly. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

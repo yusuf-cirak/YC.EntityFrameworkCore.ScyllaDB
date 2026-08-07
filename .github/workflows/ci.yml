@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore YC.EntityFrameworkCore.ScyllaDB.slnx
+
+      - name: Build
+        run: dotnet build YC.EntityFrameworkCore.ScyllaDB.slnx --no-restore --configuration Release
+
+      - name: Unit tests
+        run: >
+          dotnet test test/YC.EntityFrameworkCore.ScyllaDB.UnitTests
+          --no-build --configuration Release
+          --collect:"XPlat Code Coverage" --results-directory coverage
+
+      # Testcontainers uses the runner's own Docker daemon; no service container needed.
+      - name: Functional tests
+        run: >
+          dotnet test test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests
+          --no-build --configuration Release
+          --collect:"XPlat Code Coverage" --results-directory coverage
+
+      - uses: codecov/codecov-action@v7
+        with:
+          directory: coverage
+          fail_ci_if_error: false
+
+      - name: Pack
+        run: dotnet pack src/YC.EntityFrameworkCore.ScyllaDB --no-build --configuration Release --output artifacts
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nuget-packages
+          path: artifacts/*

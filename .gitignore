@@ -1,0 +1,14 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+.idea/
+.vs/
+.vscode/
+*.user
+artifacts/
+coverage/
+TestResults/
+.claude-flow/
+.remember/

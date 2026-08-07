@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>YC.EntityFrameworkCore.ScyllaDB</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>YC.EntityFrameworkCore.ScyllaDB</PackageId>
+    <Description>ScyllaDB database provider for Entity Framework Core, built on the official ScyllaDB C# driver. Maps EF Core models onto CQL: partition and clustering keys, collections, user-defined types, TTL, lightweight transactions and counters.</Description>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Pack quality">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="ScyllaDBCSharpDriver" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

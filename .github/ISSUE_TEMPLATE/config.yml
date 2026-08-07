@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ScyllaDB CQL reference
+    url: https://docs.scylladb.com/manual/stable/cql/
+    about: Many "limitations" are CQL itself. Check what CQL supports before filing.
+  - name: Questions and ideas
+    url: https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB/discussions
+    about: Ask a question or float an idea.
