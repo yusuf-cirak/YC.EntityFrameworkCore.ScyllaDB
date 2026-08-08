@@ -39,4 +39,51 @@ internal static class ScyllaStrings
 
     public static string NotImplementedUntilPhase(string feature, string phase)
         => $"{feature} is not implemented yet (planned for {phase}).";
+
+    public static string SchemaAgreementTimedOut(TimeSpan timeout)
+        => $"The schema change was applied, but the cluster did not reach agreement within {timeout}. Some "
+           + "nodes have not yet converged, so statements depending on the new schema may fail. Raise the "
+           + "limit with 'WithSchemaAgreementTimeout', or retry.";
+
+    public static string NoPartitionKey(string entityType)
+        => $"Entity type '{entityType}' has no partition key, and every CQL table requires one — it is what "
+           + "decides which node owns a row. Declare it with 'HasPartitionKey(x => x.Property)' or the "
+           + "[PartitionKey] attribute.";
+
+    public static string NoKeyspace(string entityType)
+        => $"Entity type '{entityType}' is not mapped to a keyspace. Set one for the whole model with "
+           + "'modelBuilder.HasDefaultKeyspace(\"name\")', or for this type with "
+           + "'ToScyllaTable(\"table\", keyspace: \"name\")'.";
+
+    public static string NoCqlTypeForProperty(string entityType, string property, string clrType)
+        => $"Property '{entityType}.{property}' of type '{clrType}' has no CQL type. Map it explicitly with "
+           + "'HasCqlType(\"...\")' or the [CqlType] attribute, convert it to a supported type with "
+           + "'HasConversion', or ignore it.";
+
+    public static string AmbiguousCollectionKind(string entityType, string property, string clrType)
+        => $"Property '{entityType}.{property}' of type '{clrType}' could map to either a CQL list or a CQL "
+           + "set, and the two behave differently — a list keeps order and duplicates, a set does not. Say "
+           + "which with '.IsList()' or '.IsSet()'.";
+
+    public static string CounterMixedWithRegularColumn(string entityType, string counter, string other)
+        => $"Entity type '{entityType}' mixes counter column '{counter}' with regular column '{other}'. A CQL "
+           + "table is either all counters plus its primary key, or contains none at all. Move "
+           + $"'{other}' to a separate table.";
+
+    public static string CounterInPrimaryKey(string entityType, string property)
+        => $"Counter column '{entityType}.{property}' cannot be part of the primary key.";
+
+    public static string CounterTableWithDefaultTimeToLive(string entityType)
+        => $"Entity type '{entityType}' is a counter table, which cannot have a default time to live. Counters "
+           + "have no expiry.";
+
+    public static string StaticColumnWithoutClusteringKey(string entityType, string property)
+        => $"Column '{entityType}.{property}' is static, but '{entityType}' has no clustering key. A static "
+           + "column holds one value per partition, which means nothing when each partition holds a single "
+           + "row. Add a clustering key, or drop the static marker.";
+
+    public static string NavigationsNotSupported(string entityType, string navigation, string target)
+        => $"Entity type '{entityType}' declares navigation '{navigation}' to '{target}'. CQL has no joins and "
+           + "no foreign keys, so related data cannot be loaded in one query. Denormalise "
+           + $"'{target}' into '{entityType}', or query the two tables separately.";
 }

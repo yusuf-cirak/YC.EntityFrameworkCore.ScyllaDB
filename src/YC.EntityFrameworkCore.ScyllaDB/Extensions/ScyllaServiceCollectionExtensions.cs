@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Storage;
 using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
-using YC.EntityFrameworkCore.ScyllaDB.Query.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Infrastructure.Internal;
+using YC.EntityFrameworkCore.ScyllaDB.Metadata.Conventions;
+using YC.EntityFrameworkCore.ScyllaDB.Query.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
 
 // ReSharper disable once CheckNamespace
@@ -34,6 +36,8 @@ public static class ScyllaServiceCollectionExtensions
             .TryAdd<IExecutionStrategyFactory, ScyllaExecutionStrategyFactory>()
             .TryAdd<IDatabaseCreator, ScyllaDatabaseCreator>()
             .TryAdd<ITypeMappingSource, ScyllaTypeMappingSource>()
+            .TryAdd<IModelValidator, ScyllaModelValidator>()
+            .TryAdd<IProviderConventionSetBuilder, ScyllaConventionSetBuilder>()
             .TryAdd<IQueryContextFactory, ScyllaQueryContextFactory>()
             .TryAdd<IQueryableMethodTranslatingExpressionVisitorFactory,
                 ScyllaQueryableMethodTranslatingExpressionVisitorFactory>()
@@ -43,7 +47,8 @@ public static class ScyllaServiceCollectionExtensions
                 b => b
                     .TryAddSingleton<IScyllaSingletonOptions, ScyllaSingletonOptions>()
                     .TryAddSingleton<IScyllaSingletonClientWrapper, ScyllaSingletonClientWrapper>()
-                    .TryAddScoped<IScyllaClientWrapper, ScyllaClientWrapper>())
+                    .TryAddScoped<IScyllaClientWrapper, ScyllaClientWrapper>()
+                    .TryAddSingleton<IScyllaDdlGenerator, ScyllaDdlGenerator>())
             .TryAddCoreServices();
 
         return services;

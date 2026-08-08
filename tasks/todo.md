@@ -53,16 +53,44 @@ Plan: `~/.claude/plans/scylladbcsharpdriver-n-zerine-kurulu-htt-valiant-pudding.
 - `NonRetryingExecutionStrategy` ships in core, so the provider needs no strategy of its own — the driver owns
   retries, and layering EF retries on top could duplicate non-idempotent writes undetectably.
 
-## Phase 2 — Metadata, conventions, DDL, EnsureCreated
+## Phase 2 — Metadata, conventions, DDL, EnsureCreated ✅
 
-- [ ] Attributes and enums in the bare root namespace (`[PartitionKey]`, `[ClusteringKey]`, …)
-- [ ] `HasPartitionKey` / `HasClusteringKey` / `ToTable` / keyspace replication builder extensions
-- [ ] Conventions, including the primary key = partition keys ++ clustering keys rule
-- [ ] `ScyllaModelValidator`
-- [ ] `IScyllaDdlGenerator` + `ScyllaDatabaseCreator.EnsureCreatedAsync` / `EnsureDeletedAsync`
-- [ ] Schema-agreement wait after DDL
+- [x] Attributes and enums in the bare root namespace (`[ScyllaTable]`, `[PartitionKey]`, `[ClusteringKey]`,
+      `[StaticColumn]`, `[Counter]`, `[CqlType]`), plus `ScyllaReplication`
+- [x] `ToScyllaTable` / `HasPartitionKey` / `HasClusteringKey` / `HasDefaultTimeToLive`, keyspace replication,
+      `IsStaticColumn` / `IsCounter` / `HasCqlType` / `IsList` / `IsSet` / `IsMap`
+- [x] Annotation names and metadata read/write extensions
+- [x] `ScyllaModelFinalizingConvention` — attributes, primary key rule, ambiguous-collection check
+- [x] `ScyllaModelValidator` — keyspace, navigations, partition key, static columns, counters, type mappings
+- [x] `ScyllaTypeMappingSource` — the scalar CQL table, enums, and collections
+- [x] `IScyllaDdlGenerator` + `EnsureCreatedAsync` / `EnsureDeletedAsync` with schema-agreement waiting
 
-## Phases 3–8
+**Verified:** build clean across 5 projects, 0 warnings. 56 unit tests; 7 functional tests against a real
+container, including reading column kinds and clustering order back out of `system_schema`.
 
-See the plan file. Order: type mapping → SaveChanges → query pipeline → Scylla-specific writes →
-query ergonomics → scaffolding → docs and 0.1.0.
+**Findings:**
+- Type mapping had to come forward from its own phase: DDL cannot emit `CREATE TABLE` without knowing each
+  column's CQL type.
+- The session is no longer bound to a keyspace. Binding it made `EnsureCreatedAsync` impossible — connecting
+  would fail before the keyspace it was meant to create existed. Every statement is keyspace-qualified instead,
+  which is unambiguous anyway. `CanConnectAsync` now checks `system_schema.keyspaces` explicitly.
+- An unmappable collection member never becomes an EF property, so neither `ModelValidator` nor its
+  `ThrowPropertyNotMappedException` hook ever sees it — verified empirically. The check lives in the
+  model-finalizing convention, where the CLR member is still in view.
+- The keyspace named in `UseScyllaDb` now becomes the model's default, so it need not be repeated in
+  `OnModelCreating`.
+- Scylla reports `clustering_order` as `DESC`; Cassandra's documentation shows `desc`. Compared case-insensitively.
+- All identifiers are quoted, because an unquoted CQL identifier folds to lower case and would silently turn
+  `SensorId` into `sensorid`.
+
+## Phase 3 — SaveChanges
+
+- [ ] `ScyllaModificationCommand` — insert, update, delete, counter update
+- [ ] Grouping: same-partition unlogged batch, cross-partition independent statements, logged batch opt-in
+- [ ] Routing keys and idempotence flags
+- [ ] `ScyllaDatabaseWrapper.SaveChangesAsync`
+
+## Phases 4–8
+
+See the plan file. Order: query pipeline → Scylla-specific writes (TTL, LWT, counters) → query ergonomics →
+scaffolding → docs and 0.1.0.

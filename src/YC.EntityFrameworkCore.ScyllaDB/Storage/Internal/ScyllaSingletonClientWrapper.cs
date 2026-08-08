@@ -123,9 +123,10 @@ public class ScyllaSingletonClientWrapper : IScyllaSingletonClientWrapper
 
         _ownsSession = true;
 
-        return string.IsNullOrWhiteSpace(_options.Keyspace)
-            ? await cluster.ConnectAsync().ConfigureAwait(false)
-            : await cluster.ConnectAsync(_options.Keyspace).ConfigureAwait(false);
+        // Deliberately connected without a keyspace. Binding the session to one would make it impossible to
+        // create that keyspace, since connecting would fail before EnsureCreatedAsync could run. Every
+        // statement the provider emits is keyspace-qualified instead, which is also unambiguous.
+        return await cluster.ConnectAsync().ConfigureAwait(false);
     }
 
     protected virtual ICluster BuildCluster()
