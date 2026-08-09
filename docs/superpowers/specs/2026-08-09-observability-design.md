@@ -99,8 +99,10 @@ identifies the failure.
 `db.system.name` is `cassandra` because the semantic conventions define no separate ScyllaDB value, and ScyllaDB
 is CQL-compatible — a consumer's Cassandra dashboards should apply unchanged.
 
-`db.response.returned_rows` is set only in `ToPageAsync`, where the rows are already materialised into a list.
-Ordinary query results are streamed, so counting them would force materialisation purely to report a number.
+`db.response.returned_rows` comes from `RowSet.GetAvailableWithoutFetching()`, which reports the rows already
+buffered from the response without advancing the enumerator or fetching another page. CQL is a paged protocol,
+so "rows returned by the operation" *is* the page — counting the whole result set would mean draining it, which
+is neither free nor what the attribute means.
 
 ## Metrics
 

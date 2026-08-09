@@ -284,14 +284,32 @@ public static class ScyllaInstrumentation
     }
 
     /// <summary>
-    ///     Records the consistency the coordinator actually achieved, which is not necessarily the one
-    ///     configured — the driver applies its own default when none was set.
+    ///     Records what the response tells us: the consistency actually achieved, and how many rows came back.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The achieved consistency is not necessarily the one configured — the driver applies its own
+    ///         default when none was set, and that default is what a reader needs to see.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="RowSet.GetAvailableWithoutFetching" /> counts the rows already buffered from this
+    ///         response without advancing the enumerator or fetching another page. CQL is a paged protocol, so
+    ///         "rows returned by the operation" is the page; counting the whole result set would mean draining
+    ///         it, which is neither free nor what the attribute means.
+    ///     </para>
+    /// </remarks>
     public static void RecordResult(Activity? activity, RowSet rowSet)
     {
-        activity?.SetTag(
+        if (activity is null)
+        {
+            return;
+        }
+
+        activity.SetTag(
             "cassandra.consistency.level",
             rowSet.Info.AchievedConsistency.ToString().ToLowerInvariant());
+
+        activity.SetTag("db.response.returned_rows", rowSet.GetAvailableWithoutFetching());
     }
 
     /// <summary>
@@ -595,6 +613,50 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
         Assert.Equal("readings", span.GetTagItem("db.collection.name"));
         Assert.Contains("SELECT", (string)span.GetTagItem("db.query.text")!, StringComparison.Ordinal);
         Assert.NotNull(span.GetTagItem("cassandra.consistency.level"));
+        Assert.NotNull(span.GetTagItem("db.response.returned_rows"));
+    }
+
+    /// <summary>
+    ///     CQL is a paged protocol, so "rows returned" means the rows in this response — read without
+    ///     advancing the enumerator, since draining the result set to count it would defeat the point.
+    /// </summary>
+    [Fact]
+    public async Task Returned_row_count_reflects_the_rows_in_the_response()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var sensorId = Guid.NewGuid();
+
+        await using (var seed = CreateContext())
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                seed.Add(
+                    new Reading
+                    {
+                        SensorId = sensorId,
+                        RecordedAt = DateTimeOffset.UnixEpoch.AddMinutes(i),
+                        Value = i
+                    });
+            }
+
+            await seed.SaveChangesAsync(cancellationToken);
+        }
+
+        var (captured, listener) = Listen();
+        using (listener)
+        {
+            await using var context = CreateContext();
+
+            var readings = await context.Readings
+                .Where(r => r.SensorId == sensorId)
+                .ToListAsync(cancellationToken);
+
+            Assert.Equal(3, readings.Count);
+        }
+
+        var span = Assert.Single(captured, a => (string?)a.GetTagItem("db.operation.name") == "SELECT");
+
+        Assert.Equal(3, span.GetTagItem("db.response.returned_rows"));
     }
 
     [Fact]
@@ -995,24 +1057,23 @@ git commit -m "test: cover the operation-duration histogram"
 
 ---
 
-### Task 4: Honour the query-text option, report returned rows, and document it
+### Task 4: Prove the query-text option and document the telemetry
 
 **Files:**
-- Modify: `src/YC.EntityFrameworkCore.ScyllaDB/Query/Internal/ScyllaQueryingEnumerable.cs`
 - Modify: `test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests/TelemetryTests.cs`
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: `ScyllaOperationContext`, `IScyllaClientWrapper.ExecuteAsync(IStatement, ScyllaOperationContext, CancellationToken)` from Tasks 1 and 2.
+- Consumes: everything from Tasks 1 to 3. No production code changes — the behaviour is already implemented; this task pins it and documents it.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing test**
 
 Append to `TelemetryTests.cs`:
 
 ```csharp
     /// <summary>
     ///     The text carries no values — everything is bound through markers — but it does carry schema names,
-    ///     which some environments treat as sensitive.
+    ///     which some environments treat as sensitive. Turning it off must leave the rest of the span intact.
     /// </summary>
     [Fact]
     public async Task Query_text_can_be_turned_off_without_losing_the_rest()
@@ -1032,163 +1093,18 @@ Append to `TelemetryTests.cs`:
         Assert.Null(span.GetTagItem("db.query.text"));
         Assert.Equal(Keyspace, span.GetTagItem("db.namespace"));
         Assert.Equal("readings", span.GetTagItem("db.collection.name"));
-    }
-
-    /// <summary>
-    ///     Only the paged path reports a row count. Ordinary results are streamed, so counting them would force
-    ///     materialisation purely to report a number.
-    /// </summary>
-    [Fact]
-    public async Task Paged_read_reports_the_rows_it_returned()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var sensorId = Guid.NewGuid();
-
-        await using (var seed = CreateContext())
-        {
-            for (var i = 0; i < 3; i++)
-            {
-                seed.Add(
-                    new Reading
-                    {
-                        SensorId = sensorId,
-                        RecordedAt = DateTimeOffset.UnixEpoch.AddMinutes(i),
-                        Value = i
-                    });
-            }
-
-            await seed.SaveChangesAsync(cancellationToken);
-        }
-
-        var (captured, listener) = Listen();
-        using (listener)
-        {
-            await using var context = CreateContext();
-
-            await context.Readings
-                .Where(r => r.SensorId == sensorId)
-                .ToPageAsync(pageSize: 2, cancellationToken: cancellationToken);
-        }
-
-        var span = Assert.Single(captured, a => a.GetTagItem("db.response.returned_rows") is not null);
-
-        Assert.Equal(2, span.GetTagItem("db.response.returned_rows"));
+        Assert.NotNull(span.GetTagItem("cassandra.consistency.level"));
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: Run the test**
 
-Run: `dotnet test test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests --filter "FullyQualifiedName~TelemetryTests"`
-Expected: `Query_text_can_be_turned_off_without_losing_the_rest` passes already (Task 2 implemented the option), `Paged_read_reports_the_rows_it_returned` FAILS — no span carries `db.response.returned_rows`.
+Run: `dotnet test test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests --filter "FullyQualifiedName~Query_text_can_be_turned_off"`
+Expected: PASS. Task 2 implemented the option; this pins it so a later refactor cannot quietly start leaking the text again.
 
-- [ ] **Step 3: Report the row count from the paged path**
+If it fails, the fix belongs in `ScyllaClientWrapper.ExecuteAsync` — the `QueryText` must be cleared from the context *before* `StartActivity`, not after.
 
-In `ScyllaQueryingEnumerable.ToPageAsync`, capture the activity so the count can be attached after the rows are materialised. Replace the execute call and the loop:
-
-```csharp
-        using var activity = Activity.Current;
-
-        var rowSet = await clientWrapper.ExecuteAsync(
-                statement,
-                new ScyllaOperationContext(
-                    "SELECT",
-                    _select.EntityType.GetKeyspace(),
-                    _select.EntityType.GetScyllaTableName(),
-                    cql),
-                cancellationToken)
-            .ConfigureAwait(false);
-```
-
-That does not work — the activity has already stopped by the time `ExecuteAsync` returns. Instead, attach the count to the page-reading span by starting one around the whole paged read. Replace the beginning of `ToPageAsync`, after the argument check:
-
-```csharp
-        var clientWrapper = _queryContext.Context.GetService<IScyllaClientWrapper>();
-        var (cql, values) = CqlQueryGenerator.Generate(_select, _queryContext.Parameters);
-
-        var context = new ScyllaOperationContext(
-            "SELECT",
-            _select.EntityType.GetKeyspace(),
-            _select.EntityType.GetScyllaTableName(),
-            cql);
-```
-
-and replace the return with a version that records the count on the current activity, which the client wrapper leaves as the parent:
-
-```csharp
-        var page = new ScyllaPage<TResult>(
-            results,
-            rowSet.PagingState is { Length: > 0 } state ? Convert.ToBase64String(state) : null);
-
-        Activity.Current?.SetTag("db.response.returned_rows", results.Count);
-
-        return page;
-```
-
-Simpler and correct: have the client wrapper accept the count afterwards. Add to `ScyllaInstrumentation`:
-
-```csharp
-    /// <summary>
-    ///     Records how many rows a paged read returned.
-    /// </summary>
-    /// <remarks>
-    ///     Only the paged path knows this without cost: ordinary results are streamed, so counting them would
-    ///     force materialisation purely to report a number.
-    /// </remarks>
-    public static void RecordReturnedRows(Activity? activity, int rowCount)
-        => activity?.SetTag("db.response.returned_rows", rowCount);
-```
-
-and change `IScyllaClientWrapper` to expose the span it created, by adding an overload that hands the activity back:
-
-```csharp
-    /// <summary>
-    ///     Executes a statement and yields the span it was recorded on, so a caller that knows the row count
-    ///     can attach it.
-    /// </summary>
-    Task<(RowSet RowSet, Activity? Activity)> ExecuteWithActivityAsync(
-        IStatement statement,
-        ScyllaOperationContext context,
-        CancellationToken cancellationToken = default);
-```
-
-In `ScyllaClientWrapper`, extract the existing body into this method — it returns the tuple and does not dispose the activity — and make `ExecuteAsync(IStatement, ScyllaOperationContext, CancellationToken)` call it and dispose:
-
-```csharp
-    public virtual async Task<RowSet> ExecuteAsync(
-        IStatement statement,
-        ScyllaOperationContext context,
-        CancellationToken cancellationToken = default)
-    {
-        var (rowSet, activity) = await ExecuteWithActivityAsync(statement, context, cancellationToken)
-            .ConfigureAwait(false);
-
-        activity?.Dispose();
-
-        return rowSet;
-    }
-```
-
-Then in `ToPageAsync`, use it:
-
-```csharp
-        var (rowSet, activity) = await clientWrapper
-            .ExecuteWithActivityAsync(statement, context, cancellationToken)
-            .ConfigureAwait(false);
-
-        // ... existing materialisation loop, filling `results` ...
-
-        ScyllaInstrumentation.RecordReturnedRows(activity, results.Count);
-        activity?.Dispose();
-```
-
-Add `using System.Diagnostics;` to `ScyllaQueryingEnumerable.cs` and `ScyllaClientWrapper.cs` if not already present.
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `dotnet build YC.EntityFrameworkCore.ScyllaDB.slnx && dotnet test test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests --filter "FullyQualifiedName~TelemetryTests"`
-Expected: build clean with zero warnings; 8 tests pass.
-
-- [ ] **Step 5: Document it in the README**
+- [ ] **Step 3: Document it in the README**
 
 Add a section after "Seeing the CQL":
 
@@ -1214,22 +1130,22 @@ column names, so `WithQueryTextInTelemetry(false)` turns it off where schema nam
 Nothing listening means no span is created and no measurement recorded, so this costs nothing when unobserved.
 ```
 
-- [ ] **Step 6: Run everything**
+- [ ] **Step 4: Run everything**
 
 Run: `dotnet build YC.EntityFrameworkCore.ScyllaDB.slnx && dotnet test test/YC.EntityFrameworkCore.ScyllaDB.UnitTests && dotnet test test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests`
 Expected: build clean with zero warnings; every test passes.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/YC.EntityFrameworkCore.ScyllaDB test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests/TelemetryTests.cs README.md
-git commit -m "feat: report returned rows and document telemetry"
+git add test/YC.EntityFrameworkCore.ScyllaDB.FunctionalTests/TelemetryTests.cs README.md
+git commit -m "docs: document the provider's telemetry"
 ```
 
 ---
 
 ## Self-review notes
 
-**Spec coverage.** Emission mechanism → Task 1. Operation context → Tasks 1 and 2. Span attributes → Task 2, with `cassandra.consistency.level` from `ExecutionInfo.AchievedConsistency` and `db.response.returned_rows` deferred to Task 4 as the spec requires. Metric → Tasks 1 and 3. Cost when unobserved → asserted in Task 1, Step 1. Configuration → Task 1, Steps 5 and 6; behaviour asserted in Task 4. Error handling → Task 2, Step 3, asserted in Task 2 and Task 3. Testing → Tasks 2, 3, 4. Documentation → Task 4, Step 5. Non-goals stay unimplemented.
+**Spec coverage.** Emission mechanism → Task 1. Operation context → Tasks 1 and 2. Span attributes → Task 2, including `cassandra.consistency.level` from `ExecutionInfo.AchievedConsistency` and `db.response.returned_rows` from `RowSet.GetAvailableWithoutFetching()`. Metric → Tasks 1 and 3. Cost when unobserved → asserted in Task 1, Step 1. Configuration → Task 1, Steps 5 and 6; behaviour asserted in Task 4. Error handling → Task 2, Step 3, asserted in Tasks 2 and 3. Testing → Tasks 2, 3, 4. Documentation → Task 4, Step 3. Non-goals stay unimplemented.
 
-**Known wrinkle.** Task 4 Step 3 walks through a dead end before landing on `ExecuteWithActivityAsync`. That is deliberate: the obvious approach — reading `Activity.Current` after the call — does not work, because the span has already stopped, and an implementer who does not see why will reintroduce it.
+**Design note on the row count.** An earlier draft had the client wrapper hand its `Activity` back to `ToPageAsync` so the caller could attach a row count after materialising the page. That was wrong twice over: the span has already stopped by the time `ExecuteAsync` returns, and handing a live `Activity` across a method boundary makes disposal someone else's problem. `RowSet.GetAvailableWithoutFetching()` reports the rows buffered from the response without advancing the enumerator, so the wrapper sets the attribute itself and no caller needs to know a span exists. Do not reintroduce an activity-returning overload.
