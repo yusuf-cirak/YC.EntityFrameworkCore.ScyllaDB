@@ -111,4 +111,36 @@ public class InstrumentationTests
             ScyllaInstrumentation.StartActivity(
                 new ScyllaOperationContext("SELECT", "metrics", "readings", null), statement: null));
     }
+
+    /// <summary>
+    ///     Disposing an <see cref="Activity" /> stops it, which is what runs every listener's
+    ///     <c>ActivityStopped</c> callback — exactly where a broken exporter or processor would throw. If that
+    ///     escaped <see cref="ScyllaInstrumentation.StopActivity" />, it would turn a successful query into a
+    ///     faulted task or, on a failed one, replace the genuine driver exception with the listener's. Neither
+    ///     is acceptable, so this pins that a throwing listener never reaches the caller.
+    /// </summary>
+    [Fact]
+    public void StopActivity_does_not_throw_when_a_listener_throws_on_stop()
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ScyllaInstrumentation.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = _ => throw new InvalidOperationException("A broken listener must not surface.")
+        };
+
+        ActivitySource.AddActivityListener(listener);
+
+        using (listener)
+        {
+            var activity = ScyllaInstrumentation.StartActivity(
+                new ScyllaOperationContext("SELECT", "metrics", "readings", null), statement: null);
+
+            Assert.NotNull(activity);
+
+            var exception = Record.Exception(() => ScyllaInstrumentation.StopActivity(activity));
+
+            Assert.Null(exception);
+        }
+    }
 }

@@ -95,7 +95,16 @@ public static class ScyllaInstrumentation
         }
 
         var operation = context.OperationName ?? DeriveOperationName(context.QueryText);
-        var activity = Source.StartActivity(SpanName(operation, context), ActivityKind.Client);
+
+        // `context` is an `in` parameter and cannot be captured by the lambda below, so the span name is
+        // built from it here first.
+        var spanName = SpanName(operation, context);
+
+        // A listener's `Sample` callback runs inside `StartActivity` and is another extensibility point that
+        // can throw, before the caller's own try block has even started. Routed through the same isolation as
+        // every other telemetry step, so a throwing sampler still leaves the caller with no activity rather
+        // than an exception.
+        var activity = Observe(() => Source.StartActivity(spanName, ActivityKind.Client));
 
         if (activity is null)
         {
@@ -152,6 +161,30 @@ public static class ScyllaInstrumentation
         });
 
         return activity;
+    }
+
+    /// <summary>
+    ///     Stops an activity that <see cref="StartActivity" /> returned.
+    /// </summary>
+    /// <remarks>
+    ///     Disposing an <see cref="Activity" /> stops it, and stopping it is what invokes every listener's
+    ///     <c>ActivityStopped</c> callback — where an exporter or processor actually runs. A <c>using</c>
+    ///     declaration compiles to the <em>outermost</em> <c>finally</c> in the method that declares it, outside
+    ///     any <c>try</c>/<c>catch</c>/<c>finally</c> written below it, so letting the runtime dispose the
+    ///     activity implicitly would run a listener's callback where nothing catches it: a listener that throws
+    ///     on stop would turn a successful query into a faulted task, and on a failure path would replace the
+    ///     genuine driver exception with its own. Calling this explicitly from inside the caller's own
+    ///     <c>finally</c>, routed through the same isolation as every other telemetry step, keeps that
+    ///     impossible.
+    /// </remarks>
+    public static void StopActivity(Activity? activity)
+    {
+        if (activity is null)
+        {
+            return;
+        }
+
+        Observe(activity.Dispose);
     }
 
     /// <summary>
@@ -219,8 +252,19 @@ public static class ScyllaInstrumentation
     /// <summary>
     ///     Records how long an operation took, whether it succeeded or failed.
     /// </summary>
+    /// <remarks>
+    ///     Mirrors <see cref="StartActivity" />'s <see cref="ActivitySource.HasListeners" /> guard:
+    ///     <c>OperationDuration.Enabled</c> is checked before anything else, so a statement executed with no
+    ///     meter listener pays neither for deriving the operation name nor for the closure and
+    ///     <see cref="Action" /> this method would otherwise allocate on every call.
+    /// </remarks>
     public static void RecordDuration(TimeSpan elapsed, in ScyllaOperationContext context, string? errorType)
     {
+        if (!OperationDuration.Enabled)
+        {
+            return;
+        }
+
         // `context` is an `in` parameter and cannot be captured by the lambda below, so the fields the
         // lambda needs are copied out here first.
         var operation = context.OperationName ?? DeriveOperationName(context.QueryText);
@@ -229,11 +273,6 @@ public static class ScyllaInstrumentation
 
         Observe(() =>
         {
-            if (!OperationDuration.Enabled)
-            {
-                return;
-            }
-
             var tags = new TagList { { "db.system.name", "cassandra" } };
 
             if (operation is not null)
@@ -266,13 +305,15 @@ public static class ScyllaInstrumentation
     /// <remarks>
     ///     Every caller above sits on the query's own success/failure path — <see cref="RecordResult" /> runs
     ///     where a successful result is about to be returned, <see cref="RecordDuration" /> runs in a
-    ///     <c>finally</c> around both outcomes. An exception escaping here would either replace a genuine
-    ///     driver exception or turn a successful query into a reported failure. <see cref="Activity.SetTag" />
-    ///     and <c>Histogram&lt;T&gt;.Record</c> are documented not to throw in normal use, but that guarantee
-    ///     should hold because this method makes it structural, not because the BCL happens to behave today.
-    ///     The catch is deliberately silent: a broken exporter or listener must never
-    ///     fail a query. Cancellation and the exceptions that mean the process itself is unwell are left to
-    ///     propagate untouched, since swallowing those would trade a real problem for a quiet one.
+    ///     <c>finally</c> around both outcomes, and <see cref="StartActivity" />/<see cref="StopActivity" />
+    ///     wrap the two points where a listener extends the runtime (<c>Sample</c> and <c>ActivityStopped</c>).
+    ///     An exception escaping here would either replace a genuine driver exception or turn a successful query
+    ///     into a reported failure. <see cref="Activity.SetTag" /> and <c>Histogram&lt;T&gt;.Record</c> are
+    ///     documented not to throw in normal use, but that guarantee should hold because this method makes it
+    ///     structural, not because the BCL happens to behave today. The catch is deliberately silent: a broken
+    ///     exporter or listener must never fail a query. Cancellation and the exceptions that mean the process
+    ///     itself is unwell are left to propagate untouched, since swallowing those would trade a real problem
+    ///     for a quiet one.
     /// </remarks>
     /// <param name="action">The telemetry-recording step to run.</param>
     private static void Observe(Action action)
@@ -285,6 +326,26 @@ public static class ScyllaInstrumentation
             or StackOverflowException or AccessViolationException))
         {
             // Swallowed deliberately — see remarks above.
+        }
+    }
+
+    /// <summary>
+    ///     Runs a piece of telemetry-recording code that produces a value, under the same isolation as
+    ///     <see cref="Observe(Action)" />.
+    /// </summary>
+    /// <param name="action">The telemetry-recording step to run.</param>
+    /// <returns>What <paramref name="action" /> returned, or <see langword="default" /> if it threw.</returns>
+    private static T? Observe<T>(Func<T?> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException
+            or StackOverflowException or AccessViolationException))
+        {
+            // Swallowed deliberately — see remarks on Observe(Action) above.
+            return default;
         }
     }
 

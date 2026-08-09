@@ -256,10 +256,23 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
 
         batch.SetIdempotence(batchType != BatchType.Counter);
 
+        // ExecuteGroupAsync always hands in a single partition group, so every operation shares one keyspace
+        // and table and operations[0] is representative. SaveChangesAsync's Logged path is different: it sends
+        // every non-conditional write as one batch regardless of partition, so a batch can span tables. The
+        // OpenTelemetry database conventions define db.collection.name as the target of a single-collection
+        // operation, so when the operations disagree the honest span reports no table at all, rather than
+        // naming one table while silently misattributing another table's writes and latency to it.
+        var first = operations[0].PartitionKey;
+        var keyspace = operations.All(o => string.Equals(o.PartitionKey.Keyspace, first.Keyspace, StringComparison.Ordinal))
+            ? first.Keyspace
+            : null;
+        var table = operations.All(o => string.Equals(o.PartitionKey.Table, first.Table, StringComparison.Ordinal))
+            ? first.Table
+            : null;
+
         await _clientWrapper.ExecuteAsync(
                 batch,
-                new ScyllaOperationContext(
-                    "BATCH", operations[0].PartitionKey.Keyspace, operations[0].PartitionKey.Table),
+                new ScyllaOperationContext("BATCH", keyspace, table),
                 cancellationToken)
             .ConfigureAwait(false);
     }

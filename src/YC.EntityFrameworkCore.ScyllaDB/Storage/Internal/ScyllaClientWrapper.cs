@@ -86,7 +86,14 @@ public class ScyllaClientWrapper : IScyllaClientWrapper, IResettableService
         // The context keeps its query text regardless of the option below: RecordDuration and the operation
         // name both derive the CQL verb from it, and neither ever emits the text itself. Only StartActivity
         // is told whether to also write it onto the span as db.query.text.
-        using var activity = ScyllaInstrumentation.StartActivity(
+        //
+        // Deliberately not `using`: disposing an Activity stops it, which is what runs a listener's
+        // ActivityStopped callback, and `using var` at the top of a method compiles to the *outermost*
+        // `finally` — outside the try/catch/finally below. A listener that throws on stop would then either
+        // fault a successful query or replace the genuine driver exception on a failed one. Stopping it
+        // explicitly inside the finally below, through ScyllaInstrumentation.StopActivity, keeps that isolated
+        // the same way every other telemetry step already is.
+        var activity = ScyllaInstrumentation.StartActivity(
             context, prepared, _options.EmitQueryTextInTelemetry);
 
         var startedAt = Stopwatch.GetTimestamp();
@@ -114,6 +121,7 @@ public class ScyllaClientWrapper : IScyllaClientWrapper, IResettableService
         }
         finally
         {
+            ScyllaInstrumentation.StopActivity(activity);
             ScyllaInstrumentation.RecordDuration(Stopwatch.GetElapsedTime(startedAt), context, errorType);
         }
     }
