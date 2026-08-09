@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
@@ -249,5 +250,82 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
         var span = Assert.Single(captured, a => a.GetTagItem("error.type") is not null);
 
         Assert.Equal(ActivityStatusCode.Error, span.Status);
+    }
+
+    private static (List<(double Value, KeyValuePair<string, object?>[] Tags)> Measurements, MeterListener Listener)
+        ListenToMeter()
+    {
+        var measurements = new List<(double, KeyValuePair<string, object?>[])>();
+
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == ScyllaInstrumentation.Name)
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            }
+        };
+
+        listener.SetMeasurementEventCallback<double>(
+            (_, value, tags, _) => measurements.Add((value, tags.ToArray())));
+
+        listener.Start();
+
+        return (measurements, listener);
+    }
+
+    /// <summary>
+    ///     One histogram carries rate, errors and duration together, so this is the single instrument a
+    ///     dashboard needs.
+    /// </summary>
+    [Fact]
+    public async Task Every_statement_records_its_duration()
+    {
+        var (measurements, listener) = ListenToMeter();
+
+        using (listener)
+        {
+            await using var context = CreateContext();
+
+            var sensorId = Guid.NewGuid();
+
+            await context.Readings
+                .Where(r => r.SensorId == sensorId)
+                .ToListAsync(TestContext.Current.CancellationToken);
+        }
+
+        var measurement = Assert.Single(
+            measurements,
+            m => m.Tags.Any(t => t.Key == "db.operation.name" && (string?)t.Value == "SELECT"));
+
+        Assert.True(measurement.Value >= 0);
+
+        var tags = measurement.Tags.ToDictionary(t => t.Key, t => t.Value, StringComparer.Ordinal);
+
+        Assert.Equal("cassandra", tags["db.system.name"]);
+        Assert.Equal(Keyspace, tags["db.namespace"]);
+        Assert.Equal("readings", tags["db.collection.name"]);
+        Assert.False(tags.ContainsKey("error.type"));
+    }
+
+    [Fact]
+    public async Task A_failed_statement_is_tagged_with_the_error_type()
+    {
+        var (measurements, listener) = ListenToMeter();
+
+        using (listener)
+        {
+            await using var context = CreateContext();
+            var client = context.GetService<Storage.Internal.IScyllaClientWrapper>();
+
+            await Assert.ThrowsAnyAsync<Cassandra.DriverException>(
+                () => client.ExecuteAsync(
+                    new Cassandra.SimpleStatement($"SELECT * FROM {Keyspace}.does_not_exist"),
+                    TestContext.Current.CancellationToken));
+        }
+
+        Assert.Contains(measurements, m => m.Tags.Any(t => t.Key == "error.type"));
     }
 }
