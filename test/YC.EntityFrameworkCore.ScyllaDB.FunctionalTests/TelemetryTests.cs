@@ -335,4 +335,31 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
 
         Assert.Contains(measurements, m => m.Tags.Any(t => t.Key == "error.type"));
     }
+
+    /// <summary>
+    ///     The text carries no values — everything is bound through markers — but it does carry schema names,
+    ///     which some environments treat as sensitive. Turning it off must leave the rest of the span intact.
+    /// </summary>
+    [Fact]
+    public async Task Query_text_can_be_turned_off_without_losing_the_rest()
+    {
+        var (captured, listener) = Listen();
+        using (listener)
+        {
+            await using var context = CreateContext(queryText: false);
+
+            var sensorId = Guid.NewGuid();
+
+            await context.Readings
+                .Where(r => r.SensorId == sensorId)
+                .ToListAsync(TestContext.Current.CancellationToken);
+        }
+
+        var span = Assert.Single(captured, a => (string?)a.GetTagItem("db.operation.name") == "SELECT");
+
+        Assert.Null(span.GetTagItem("db.query.text"));
+        Assert.Equal(Keyspace, span.GetTagItem("db.namespace"));
+        Assert.Equal("readings", span.GetTagItem("db.collection.name"));
+        Assert.NotNull(span.GetTagItem("cassandra.consistency.level"));
+    }
 }

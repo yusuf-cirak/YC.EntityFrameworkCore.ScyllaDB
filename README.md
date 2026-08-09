@@ -143,6 +143,26 @@ query.ToCqlString();
 Worth checking: in CQL the difference between a partition seek and a cluster-wide scan is which restrictions
 reached the server.
 
+### Telemetry
+
+The provider emits an `ActivitySource` and a `Meter`, both named `YC.EntityFrameworkCore.ScyllaDB`. Point
+OpenTelemetry at them:
+
+```csharp
+.AddSource("YC.EntityFrameworkCore.ScyllaDB")
+.AddMeter("YC.EntityFrameworkCore.ScyllaDB")
+```
+
+Every CQL statement produces a client span following the
+[Cassandra semantic conventions](https://opentelemetry.io/docs/specs/semconv/db/cassandra/) — `db.namespace`,
+`db.collection.name`, `db.operation.name`, `db.query.text`, `cassandra.consistency.level` — and a
+`db.client.operation.duration` measurement, which carries rate, errors and latency together.
+
+The query text contains no values: everything is bound through `?` markers. It does expose keyspace, table and
+column names, so `WithQueryTextInTelemetry(false)` turns it off where schema names are themselves sensitive.
+
+Nothing listening means no span is created and no measurement recorded, so this costs nothing when unobserved.
+
 ## Building and testing
 
 ```bash
