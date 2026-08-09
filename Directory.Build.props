@@ -25,7 +25,7 @@
     <PackageTags>scylladb;scylla;cassandra;cql;entity-framework-core;efcore;provider;nosql</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>Release notes: https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB/releases</PackageReleaseNotes>
-    <VersionPrefix>0.1.0</VersionPrefix><!-- x-release-please-version -->
+    <VersionPrefix>1.0.0</VersionPrefix><!-- x-release-please-version -->
   </PropertyGroup>
 
   <PropertyGroup>
