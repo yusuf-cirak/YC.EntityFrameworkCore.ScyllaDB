@@ -9,6 +9,36 @@ namespace Microsoft.EntityFrameworkCore;
 /// </summary>
 public static class ScyllaQueryableExtensions
 {
+    internal static readonly System.Reflection.MethodInfo PerPartitionLimitMethod =
+        typeof(ScyllaQueryableExtensions).GetMethod(nameof(PerPartitionLimit))!;
+
+    /// <summary>
+    ///     Caps the rows read from each partition, rather than from the result as a whole.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The one thing <c>Take</c> cannot express. "The newest three readings
+    ///         from every sensor" is a single query with this and one query per sensor without it, because a
+    ///         plain <c>LIMIT</c> would stop after three rows total.
+    ///     </para>
+    ///     <para>
+    ///         It only earns its keep on a query that reads more than one partition — through <c>Contains</c>
+    ///         over several keys, a secondary index, or an explicit scan. Within a single partition it does the
+    ///         same job as <c>Take</c>.
+    ///     </para>
+    /// </remarks>
+    public static IQueryable<TEntity> PerPartitionLimit<TEntity>(this IQueryable<TEntity> source, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return source.Provider.CreateQuery<TEntity>(
+            System.Linq.Expressions.Expression.Call(
+                PerPartitionLimitMethod.MakeGenericMethod(typeof(TEntity)),
+                source.Expression,
+                System.Linq.Expressions.Expression.Constant(limit)));
+    }
+
     /// <summary>
     ///     Returns the CQL this query would run, without running it.
     /// </summary>

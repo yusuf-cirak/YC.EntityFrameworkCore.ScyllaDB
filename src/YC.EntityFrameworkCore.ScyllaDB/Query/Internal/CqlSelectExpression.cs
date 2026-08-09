@@ -91,6 +91,7 @@ public sealed class CqlSelectExpression : Expression
         NonKeyRestrictions = source.NonKeyRestrictions;
         Orderings = source.Orderings;
         Limit = source.Limit;
+        PerPartitionLimit = source.PerPartitionLimit;
         AllowFiltering = source.AllowFiltering;
         Aggregate = source.Aggregate;
         Projection = source.Projection;
@@ -111,6 +112,15 @@ public sealed class CqlSelectExpression : Expression
     public IReadOnlyList<CqlOrdering> Orderings { get; private init; }
 
     public CqlValue? Limit { get; private init; }
+
+    /// <summary>
+    ///     Caps the rows read from each partition rather than from the result as a whole.
+    /// </summary>
+    /// <remarks>
+    ///     The one thing a plain <c>LIMIT</c> cannot express: "the newest three readings from every sensor" is a
+    ///     single query with this, and one query per sensor without it.
+    /// </remarks>
+    public CqlValue? PerPartitionLimit { get; private init; }
 
     public bool AllowFiltering { get; private init; }
 
@@ -155,6 +165,9 @@ public sealed class CqlSelectExpression : Expression
 
     public CqlSelectExpression WithLimit(CqlValue limit)
         => new(this) { Limit = limit };
+
+    public CqlSelectExpression WithPerPartitionLimit(CqlValue limit)
+        => new(this) { PerPartitionLimit = limit };
 
     public CqlSelectExpression WithAllowFiltering()
         => new(this) { AllowFiltering = true };
@@ -429,6 +442,13 @@ public static class CqlQueryGenerator
                 .AppendJoin(
                     ", ",
                     select.Orderings.Select(o => $"{Quote(o.Property.GetColumnName())} {(o.Ascending ? "ASC" : "DESC")}"));
+        }
+
+        // CQL fixes this order: PER PARTITION LIMIT trims each partition first, then LIMIT trims the result.
+        if (select.PerPartitionLimit is { } perPartitionLimit)
+        {
+            builder.Append(" PER PARTITION LIMIT ?");
+            values.Add(Convert.ToInt32(perPartitionLimit.Resolve(parameters), provider: null));
         }
 
         if (select.Limit is { } limit)

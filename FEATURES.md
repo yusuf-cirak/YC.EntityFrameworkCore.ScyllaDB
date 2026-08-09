@@ -152,6 +152,7 @@ required rather than suggested.
 | `First` / `FirstOrDefault` / `Single` / `SingleOrDefault` | |
 | `Count` / `LongCount` / `Any` | → `COUNT(*)` |
 | `Select` | Projections narrow the selected columns |
+| `PerPartitionLimit` | → `PER PARTITION LIMIT`, applied before `LIMIT` |
 | `ToPageAsync` | Cursor paging |
 | `EF.Functions.AllowFiltering()` | Opts into a scan |
 | `ToCqlString()` | Shows the statement without running it |
@@ -187,7 +188,20 @@ The validator runs once over the finished query, not per clause, because restric
 | `Distinct`, `Reverse`, `Last`, `OfType`, `DefaultIfEmpty` | **Not yet** |
 | `ExecuteUpdate` / `ExecuteDelete` | **CQL** — no update or delete by a non-key predicate |
 | `FromSql` | **Not yet** — reach the driver through `IScyllaClientWrapper` |
-| `PER PARTITION LIMIT` | **Not yet** |
+
+### Limiting per partition
+
+```csharp
+await context.Readings
+    .Where(r => sensorIds.Contains(r.SensorId))
+    .PerPartitionLimit(3)
+    .ToListAsync();
+```
+
+The one thing `Take` cannot express. "The newest three readings from every sensor" is a single query with this
+and one query per sensor without it, because a plain `LIMIT` would stop after three rows in total. It only earns
+its keep on a query that reads more than one partition; within a single partition it does the same job as
+`Take`.
 
 ### Async only
 

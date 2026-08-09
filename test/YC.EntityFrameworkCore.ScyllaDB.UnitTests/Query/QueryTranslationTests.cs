@@ -257,6 +257,32 @@ public class QueryTranslationTests
         Assert.DoesNotContain("\"Status\"", cql, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     The one thing a plain <c>LIMIT</c> cannot express: a limit per partition rather than per result.
+    ///     CQL fixes the order, so both clauses must appear and in this sequence.
+    /// </summary>
+    [Fact]
+    public void Per_partition_limit_is_emitted_before_the_overall_limit()
+    {
+        var ids = new[] { SensorId, Guid.Empty };
+
+        using var context = CreateContext();
+
+        var cql = context.Readings
+            .Where(r => ids.Contains(r.SensorId))
+            .PerPartitionLimit(3)
+            .Take(10)
+            .ToCqlString();
+
+        var body = cql.Split(Environment.NewLine)[0];
+
+        Assert.Contains("PER PARTITION LIMIT ?", body, StringComparison.Ordinal);
+        Assert.True(
+            body.IndexOf("PER PARTITION LIMIT", StringComparison.Ordinal)
+            < body.IndexOf(" LIMIT ?", StringComparison.Ordinal),
+            $"PER PARTITION LIMIT must precede LIMIT, but the statement was: {body}");
+    }
+
     [Fact]
     public void Scalar_projection_selects_one_column()
     {

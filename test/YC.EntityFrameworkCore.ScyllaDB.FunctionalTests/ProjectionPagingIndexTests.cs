@@ -146,6 +146,50 @@ public class ProjectionPagingIndexTests(ScyllaContainerFixture fixture) : IAsync
     }
 
     /// <summary>
+    ///     The claim a plain <c>LIMIT</c> cannot make: a cap applied to every partition separately. With
+    ///     <c>Take(6)</c> the server would stop after six rows total, most likely all from the first sensor;
+    ///     this must return two from each of the three.
+    /// </summary>
+    [Fact]
+    public async Task Per_partition_limit_caps_each_partition_separately()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var sensors = Enumerable.Range(0, 3).Select(_ => Guid.NewGuid()).ToList();
+
+        await using (var seed = CreateContext())
+        {
+            foreach (var sensor in sensors)
+            {
+                for (var i = 0; i < 5; i++)
+                {
+                    seed.Add(
+                        new Reading
+                        {
+                            SensorId = sensor,
+                            RecordedAt = Base.AddMinutes(i),
+                            Value = i,
+                            Status = "ok"
+                        });
+                }
+            }
+
+            await seed.SaveChangesAsync(cancellationToken);
+        }
+
+        await using var context = CreateContext();
+
+        var readings = await context.Readings
+            .Where(r => sensors.Contains(r.SensorId))
+            .PerPartitionLimit(2)
+            .ToListAsync(cancellationToken);
+
+        Assert.Equal(6, readings.Count);
+        Assert.All(
+            readings.GroupBy(r => r.SensorId),
+            group => Assert.Equal(2, group.Count()));
+    }
+
+    /// <summary>
     ///     An indexed column can be restricted without opting into a scan.
     /// </summary>
     [Fact]

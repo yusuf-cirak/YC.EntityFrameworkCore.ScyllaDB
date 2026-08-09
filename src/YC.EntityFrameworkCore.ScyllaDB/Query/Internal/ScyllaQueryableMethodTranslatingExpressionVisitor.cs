@@ -42,6 +42,36 @@ public class ScyllaQueryableMethodTranslatingExpressionVisitor : QueryableMethod
     protected override QueryableMethodTranslatingExpressionVisitor CreateSubqueryVisitor()
         => throw new InvalidOperationException(ScyllaStrings.SubqueriesNotSupported());
 
+    /// <summary>
+    ///     Intercepts the provider's own queryable operators, which EF Core's base visitor knows nothing about.
+    /// </summary>
+    protected override Expression VisitMethodCall(MethodCallExpression methodCallExpression)
+    {
+        ArgumentNullException.ThrowIfNull(methodCallExpression);
+
+        if (methodCallExpression.Method.DeclaringType != typeof(ScyllaQueryableExtensions)
+            || !string.Equals(
+                methodCallExpression.Method.Name,
+                nameof(ScyllaQueryableExtensions.PerPartitionLimit),
+                StringComparison.Ordinal))
+        {
+            return base.VisitMethodCall(methodCallExpression);
+        }
+
+        if (Visit(methodCallExpression.Arguments[0]) is not ShapedQueryExpression source)
+        {
+            throw new InvalidOperationException(
+                ScyllaStrings.NotTranslatable(methodCallExpression.ToString()));
+        }
+
+        if (ScyllaPredicateTranslator.ResolveValue(methodCallExpression.Arguments[1]) is not { } limit)
+        {
+            throw new InvalidOperationException(ScyllaStrings.NotTranslatable("PerPartitionLimit"));
+        }
+
+        return source.UpdateQueryExpression(SelectOf(source).WithPerPartitionLimit(limit));
+    }
+
     private static CqlSelectExpression SelectOf(ShapedQueryExpression source)
         => (CqlSelectExpression)source.QueryExpression;
 

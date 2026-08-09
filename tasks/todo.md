@@ -233,8 +233,14 @@ Plan: `docs/superpowers/plans/2026-08-09-observability.md` · Commits `741ee2d..
 
 ## Phase 8 — Release
 
-- [ ] Sample project exercising the provider end to end
-- [ ] `FEATURES.md` — the supported and unsupported matrix
-- [ ] `PER PARTITION LIMIT`, deferred from Phase 6 — needs a marker method and preprocessor plumbing; assess
-      whether it earns that before building it
+- [x] Sample project exercising the provider end to end
+- [x] `FEATURES.md` — the supported and unsupported matrix
+- [x] `PER PARTITION LIMIT` — a marker method intercepted in the translating visitor's `VisitMethodCall`; it
+      earned the plumbing, since it is the one thing `Take` cannot express
 - [ ] 0.1.0, then add the GitHub remote and push (the release workflow fires on a push to `master`)
+
+**Finding from the sample, now enforced:** a concurrency token without `UseInsertIfNotExists()` produces a check
+that silently does nothing, intermittently. ScyllaDB orders lightweight transactions only against each other, so
+a partition also written by ordinary statements falls outside the guarantee and a later `IF` can match a value
+the row has already moved past. The functional suite had missed it because its test entity happened to declare
+both. The model validator now rejects the pair.
