@@ -40,6 +40,7 @@ public class ScyllaOptionsExtension : IDbContextOptionsExtension
         BatchMode = copyFrom.BatchMode;
         MaxConcurrentWrites = copyFrom.MaxConcurrentWrites;
         EnableTracing = copyFrom.EnableTracing;
+        EmitQueryTextInTelemetry = copyFrom.EmitQueryTextInTelemetry;
         Cluster = copyFrom.Cluster;
         Session = copyFrom.Session;
     }
@@ -90,6 +91,16 @@ public class ScyllaOptionsExtension : IDbContextOptionsExtension
     public virtual int MaxConcurrentWrites { get; private set; } = 32;
 
     public virtual bool EnableTracing { get; private set; }
+
+    /// <summary>
+    ///     Whether the CQL text is attached to telemetry spans as <c>db.query.text</c>.
+    /// </summary>
+    /// <remarks>
+    ///     On by default. Every value the provider sends goes through a bind marker, so the text carries no
+    ///     literals — what it does expose is keyspace, table and column names, which is the single most useful
+    ///     field for explaining why a query is slow.
+    /// </remarks>
+    public virtual bool EmitQueryTextInTelemetry { get; private set; } = true;
 
     /// <summary>
     ///     A cluster supplied by the caller. When set, the provider connects sessions from it rather than
@@ -224,6 +235,13 @@ public class ScyllaOptionsExtension : IDbContextOptionsExtension
         return clone;
     }
 
+    public virtual ScyllaOptionsExtension WithQueryTextInTelemetry(bool emitQueryText)
+    {
+        var clone = Clone();
+        clone.EmitQueryTextInTelemetry = emitQueryText;
+        return clone;
+    }
+
     public virtual ScyllaOptionsExtension WithCluster(ICluster cluster)
     {
         ArgumentNullException.ThrowIfNull(cluster);
@@ -304,6 +322,7 @@ public class ScyllaOptionsExtension : IDbContextOptionsExtension
             hash.Add(Extension.BatchMode);
             hash.Add(Extension.MaxConcurrentWrites);
             hash.Add(Extension.EnableTracing);
+            hash.Add(Extension.EmitQueryTextInTelemetry);
             hash.Add(Extension.Cluster);
             hash.Add(Extension.Session);
 

@@ -77,6 +77,16 @@ public class ScyllaDbContextOptionsBuilder
     public virtual ScyllaDbContextOptionsBuilder WithTracing(bool enableTracing = true)
         => WithOption(e => e.WithTracing(enableTracing));
 
+    /// <summary>
+    ///     Whether telemetry spans carry the CQL text. On by default.
+    /// </summary>
+    /// <remarks>
+    ///     Turn it off where schema names are themselves sensitive. Values never appear either way — the
+    ///     provider binds everything through markers.
+    /// </remarks>
+    public virtual ScyllaDbContextOptionsBuilder WithQueryTextInTelemetry(bool emitQueryText = true)
+        => WithOption(e => e.WithQueryTextInTelemetry(emitQueryText));
+
     protected virtual ScyllaDbContextOptionsBuilder WithOption(
         Func<ScyllaOptionsExtension, ScyllaOptionsExtension> setOption)
     {

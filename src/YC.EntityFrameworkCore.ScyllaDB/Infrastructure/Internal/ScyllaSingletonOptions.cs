@@ -43,6 +43,8 @@ public interface IScyllaSingletonOptions : ISingletonOptions
 
     bool EnableTracing { get; }
 
+    bool EmitQueryTextInTelemetry { get; }
+
     ICluster? Cluster { get; }
 
     ISession? Session { get; }
@@ -81,6 +83,8 @@ public class ScyllaSingletonOptions : IScyllaSingletonOptions
 
     public virtual bool EnableTracing { get; private set; }
 
+    public virtual bool EmitQueryTextInTelemetry { get; private set; } = true;
+
     public virtual ICluster? Cluster { get; private set; }
 
     public virtual ISession? Session { get; private set; }
@@ -107,6 +111,7 @@ public class ScyllaSingletonOptions : IScyllaSingletonOptions
         BatchMode = extension.BatchMode;
         MaxConcurrentWrites = extension.MaxConcurrentWrites;
         EnableTracing = extension.EnableTracing;
+        EmitQueryTextInTelemetry = extension.EmitQueryTextInTelemetry;
         Cluster = extension.Cluster;
         Session = extension.Session;
     }
