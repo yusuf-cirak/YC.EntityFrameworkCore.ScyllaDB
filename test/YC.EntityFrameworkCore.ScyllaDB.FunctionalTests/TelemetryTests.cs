@@ -310,6 +310,13 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
         Assert.False(tags.ContainsKey("error.type"));
     }
 
+    /// <summary>
+    ///     The other half of the invariant pair: whilst <see cref="Every_statement_records_its_duration" />
+    ///     proves the <c>error.type</c> tag is <em>absent</em> on success, this one proves it is <em>present</em>
+    ///     on failure. Together they make the tag trustworthy enough to alert on: a tag that is always absent
+    ///     and a tag that is always present are both indistinguishable from a broken one if one only ever tests
+    ///     the one case.
+    /// </summary>
     [Fact]
     public async Task A_failed_statement_is_tagged_with_the_error_type()
     {
