@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Storage;
+using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
 using YC.EntityFrameworkCore.ScyllaDB.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
 
@@ -100,7 +101,15 @@ public sealed class ScyllaQueryingEnumerable<T> : IAsyncEnumerable<T>, IEnumerab
             statement.SetPagingState(Convert.FromBase64String(continuationToken));
         }
 
-        var rowSet = await clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+        var rowSet = await clientWrapper.ExecuteAsync(
+                statement,
+                new ScyllaOperationContext(
+                    "SELECT",
+                    _select.EntityType.GetKeyspace(),
+                    _select.EntityType.GetScyllaTableName(),
+                    cql),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         _queryContext.InitializeStateManager(_standAloneStateManager);
 
@@ -132,7 +141,16 @@ public sealed class ScyllaQueryingEnumerable<T> : IAsyncEnumerable<T>, IEnumerab
         var (cql, values) = CqlQueryGenerator.Generate(_select, parameters);
 
         var statement = await clientWrapper.BindAsync(cql, values, cancellationToken).ConfigureAwait(false);
-        var rowSet = await clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+
+        var rowSet = await clientWrapper.ExecuteAsync(
+                statement,
+                new ScyllaOperationContext(
+                    "SELECT",
+                    _select.EntityType.GetKeyspace(),
+                    _select.EntityType.GetScyllaTableName(),
+                    cql),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         _queryContext.InitializeStateManager(_standAloneStateManager);
 

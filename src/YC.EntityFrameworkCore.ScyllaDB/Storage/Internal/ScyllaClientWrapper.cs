@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using Cassandra;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
 using YC.EntityFrameworkCore.ScyllaDB.Infrastructure.Internal;
 
 namespace YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
@@ -15,6 +17,14 @@ public interface IScyllaClientWrapper
     Task<RowSet> ExecuteAsync(string cql, CancellationToken cancellationToken = default);
 
     Task<RowSet> ExecuteAsync(IStatement statement, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     Executes a statement, attaching what the caller knows about it to the telemetry span.
+    /// </summary>
+    Task<RowSet> ExecuteAsync(
+        IStatement statement,
+        ScyllaOperationContext context,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     ///     Prepares the statement (reusing an earlier preparation of the same CQL) and binds the values.
@@ -59,19 +69,59 @@ public class ScyllaClientWrapper : IScyllaClientWrapper, IResettableService
         return await ExecuteAsync(new SimpleStatement(cql), cancellationToken).ConfigureAwait(false);
     }
 
+    public virtual Task<RowSet> ExecuteAsync(
+        IStatement statement,
+        CancellationToken cancellationToken = default)
+        => ExecuteAsync(statement, default, cancellationToken);
+
     public virtual async Task<RowSet> ExecuteAsync(
         IStatement statement,
+        ScyllaOperationContext context,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(statement);
 
-        var session = await GetSessionAsync(cancellationToken).ConfigureAwait(false);
         var prepared = ApplyDefaults(statement);
 
-        // The execution profile is not a property of the statement; it is chosen per execution.
-        return _options.ExecutionProfile is { } executionProfile
-            ? await session.ExecuteAsync(prepared, executionProfile).ConfigureAwait(false)
-            : await session.ExecuteAsync(prepared).ConfigureAwait(false);
+        if (!_options.EmitQueryTextInTelemetry)
+        {
+            context = context with { QueryText = null };
+        }
+
+        using var activity = ScyllaInstrumentation.StartActivity(context, prepared);
+
+        if (activity is not null && context.QueryText is { } queryText)
+        {
+            activity.SetTag("db.query.text", queryText);
+        }
+
+        var startedAt = Stopwatch.GetTimestamp();
+        string? errorType = null;
+
+        try
+        {
+            var session = await GetSessionAsync(cancellationToken).ConfigureAwait(false);
+
+            // The execution profile is not a property of the statement; it is chosen per execution.
+            var rowSet = _options.ExecutionProfile is { } executionProfile
+                ? await session.ExecuteAsync(prepared, executionProfile).ConfigureAwait(false)
+                : await session.ExecuteAsync(prepared).ConfigureAwait(false);
+
+            ScyllaInstrumentation.RecordResult(activity, rowSet);
+
+            return rowSet;
+        }
+        catch (Exception exception)
+        {
+            // Recorded, never swallowed: a failure to observe must not become a failure to query.
+            errorType = exception.GetType().FullName;
+            ScyllaInstrumentation.RecordException(activity, exception);
+            throw;
+        }
+        finally
+        {
+            ScyllaInstrumentation.RecordDuration(Stopwatch.GetElapsedTime(startedAt), context, errorType);
+        }
     }
 
     public virtual async Task<BoundStatement> BindAsync(

@@ -69,8 +69,19 @@ public static class ScyllaInstrumentation
     /// <summary>
     ///     Starts a client span for a statement, or returns null when nothing is listening.
     /// </summary>
+    /// <remarks>
+    ///     Checked before anything else is computed: deriving the operation name and building the span name
+    ///     are not free, and the whole point of <see cref="ActivitySource" /> is that a caller pays nothing
+    ///     when no listener is attached. Skipping straight to <c>StartActivity</c> would still return null in
+    ///     that case, but only after doing the work this guard avoids.
+    /// </remarks>
     public static Activity? StartActivity(in ScyllaOperationContext context, IStatement? statement)
     {
+        if (!Source.HasListeners())
+        {
+            return null;
+        }
+
         var operation = context.OperationName ?? DeriveOperationName(context.QueryText);
         var activity = Source.StartActivity(SpanName(operation, context), ActivityKind.Client);
 
@@ -150,13 +161,24 @@ public static class ScyllaInstrumentation
     ///     Marks the span as failed and records the exception type.
     /// </summary>
     /// <remarks>
-    ///     The driver exposes no protocol error code on a common base type, so <c>db.response.status_code</c>
-    ///     is not emitted; the exception type is what identifies the failure consistently.
+    ///     <para>
+    ///         The driver exposes no protocol error code on a common base type, so <c>db.response.status_code</c>
+    ///         is not emitted; the exception type is what identifies the failure consistently.
+    ///     </para>
+    ///     <para>
+    ///         The status description carries only the exception's type name, never <see cref="Exception.Message" />.
+    ///         Driver exceptions — an unavailable-replica message quoting the statement, a Paxos conflict
+    ///         echoing the row that won — can and do embed values bound into the failed statement, and this
+    ///         provider never emits parameter values in telemetry. The type name alone identifies the failure
+    ///         without that risk.
+    ///     </para>
     /// </remarks>
     public static void RecordException(Activity? activity, Exception exception)
     {
-        activity?.SetTag("error.type", exception.GetType().FullName);
-        activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+        var exceptionType = exception.GetType().FullName;
+
+        activity?.SetTag("error.type", exceptionType);
+        activity?.SetStatus(ActivityStatusCode.Error, exceptionType);
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.EntityFrameworkCore.Update;
 using Microsoft.Extensions.Logging;
+using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
 using YC.EntityFrameworkCore.ScyllaDB.Infrastructure.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Update.Internal;
@@ -140,7 +141,8 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
             statement.SetSerialConsistencyLevel(serialConsistency);
         }
 
-        var rowSet = await _clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+        var rowSet = await _clientWrapper.ExecuteAsync(statement, ContextFor(operation), cancellationToken)
+            .ConfigureAwait(false);
         var row = rowSet.FirstOrDefault();
 
         if (row is not null && row.GetValue<bool>("[applied]"))
@@ -234,7 +236,8 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
         // upsert of the same values, so a retry is harmless and worth allowing.
         statement.SetIdempotence(!operation.IsCounter);
 
-        await _clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+        await _clientWrapper.ExecuteAsync(statement, ContextFor(operation), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task ExecuteBatchAsync(
@@ -253,8 +256,24 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
 
         batch.SetIdempotence(batchType != BatchType.Counter);
 
-        await _clientWrapper.ExecuteAsync(batch, cancellationToken).ConfigureAwait(false);
+        await _clientWrapper.ExecuteAsync(
+                batch,
+                new ScyllaOperationContext(
+                    "BATCH", operations[0].PartitionKey.Keyspace, operations[0].PartitionKey.Table),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
+
+    /// <summary>
+    ///     Describes a write for telemetry. A batch reports the table it targets but no single operation name,
+    ///     since it is the batch itself that was executed.
+    /// </summary>
+    private static ScyllaOperationContext ContextFor(ScyllaWriteOperation operation)
+        => new(
+            null,
+            operation.PartitionKey.Keyspace,
+            operation.PartitionKey.Table,
+            operation.Cql);
 
     public virtual void ResetState()
     {

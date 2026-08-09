@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
+using YC.EntityFrameworkCore.ScyllaDB.Diagnostics;
 using YC.EntityFrameworkCore.ScyllaDB.Infrastructure.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Internal;
 
@@ -147,7 +148,10 @@ public class ScyllaDatabaseCreator : IDatabaseCreator
     /// </summary>
     protected virtual async Task ExecuteDdlAsync(string cql, CancellationToken cancellationToken)
     {
-        var rowSet = await _clientWrapper.ExecuteAsync(new SimpleStatement(cql), cancellationToken)
+        var rowSet = await _clientWrapper.ExecuteAsync(
+                new SimpleStatement(cql),
+                new ScyllaOperationContext(null, Keyspace(_currentContext.Context.Model), null, cql),
+                cancellationToken)
             .ConfigureAwait(false);
 
         if (rowSet.Info.IsSchemaInAgreement)
