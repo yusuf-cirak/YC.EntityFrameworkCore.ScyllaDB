@@ -40,6 +40,17 @@ internal static class ScyllaStrings
     public static string NotImplementedUntilPhase(string feature, string phase)
         => $"{feature} is not implemented yet (planned for {phase}).";
 
+    public static string CounterUnchanged(string entityType)
+        => $"An entry of counter table '{entityType}' was marked as changed, but no counter moved. CQL can only "
+           + "increment a counter, so there is nothing to send. Change a counter value, or leave the entry "
+           + "untracked.";
+
+    public static string MultiPartitionSaveChanges(int partitionCount)
+        => $"SaveChangesAsync wrote to {partitionCount} partitions. CQL is only atomic within a single "
+           + "partition, so these statements were sent independently and a failure can leave the change "
+           + "half-applied. Group the writes by partition, or accept the cost of a logged batch with "
+           + "'WithBatchMode(ScyllaBatchMode.Logged)'.";
+
     public static string SchemaAgreementTimedOut(TimeSpan timeout)
         => $"The schema change was applied, but the cluster did not reach agreement within {timeout}. Some "
            + "nodes have not yet converged, so statements depending on the new schema may fail. Raise the "

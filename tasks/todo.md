@@ -83,14 +83,39 @@ container, including reading column kinds and clustering order back out of `syst
 - All identifiers are quoted, because an unquoted CQL identifier folds to lower case and would silently turn
   `SensorId` into `sensorid`.
 
-## Phase 3 — SaveChanges
+## Phase 3 — SaveChanges ✅
 
-- [ ] `ScyllaModificationCommand` — insert, update, delete, counter update
-- [ ] Grouping: same-partition unlogged batch, cross-partition independent statements, logged batch opt-in
-- [ ] Routing keys and idempotence flags
-- [ ] `ScyllaDatabaseWrapper.SaveChangesAsync`
+- [x] `ScyllaDmlGenerator` — insert, update (changed columns only), delete, counter increment
+- [x] `ScyllaPartitionKey` — value equality, the grouping key for batching
+- [x] Grouping: same-partition unlogged batch, cross-partition concurrent statements, logged batch opt-in,
+      `ScyllaBatchMode.Never`
+- [x] Prepared statements via `BindAsync`, so the driver derives routing keys itself
+- [x] Idempotence flags, counter batches kept separate
 
-## Phases 4–8
+**Verified:** build clean across 5 projects, 0 warnings. 64 unit tests, 14 functional tests against a real
+container — insert, selective update, delete, single-partition batch, cross-partition writes, logged batch,
+and a counter accumulating across two saves.
 
-See the plan file. Order: query pipeline → Scylla-specific writes (TTL, LWT, counters) → query ergonomics →
-scaffolding → docs and 0.1.0.
+**Findings:**
+- Counters cannot be inserted, so `Added` becomes an increment from zero, and `Modified` sends the *difference*
+  against EF Core's original-value snapshot. That snapshot is what makes plain `entity.Views += 7` work at all,
+  since CQL has no read-modify-write.
+- A counter increment is not idempotent — replaying it adds the delta twice — so only non-counter statements
+  are marked idempotent for driver-side retry.
+- Manual routing keys turned out unnecessary: preparing a statement lets the driver compute the routing key
+  from the bound partition key, which is what gets a write to the owning shard.
+- `EntityEntry` exposes its `IUpdateEntry` through `IInfrastructure<InternalEntityEntry>`, which makes DML
+  generation testable as a pure function with no driver involved.
+
+## Phase 4 — Query pipeline
+
+- [ ] `CqlSelectExpression` with typed restriction buckets, not a boolean predicate tree
+- [ ] `ScyllaQueryableMethodTranslatingExpressionVisitor` — Where/Select/OrderBy/Take/First/Count/Any
+- [ ] `CqlQueryValidator` — partition key, contiguous clustering prefix, ordering rules
+- [ ] `ScyllaShapedQueryCompilingExpressionVisitor` + materialization
+- [ ] Every unsupported construct throws at translation time with its documented message
+
+## Phases 5–8
+
+See the plan file. Order: Scylla-specific writes (TTL, `USING TIMESTAMP`, LWT concurrency) → query ergonomics
+(ALLOW FILTERING, paging, indexes, materialized views) → scaffolding → docs and 0.1.0.

@@ -17,6 +17,15 @@ public interface IScyllaClientWrapper
     Task<RowSet> ExecuteAsync(IStatement statement, CancellationToken cancellationToken = default);
 
     /// <summary>
+    ///     Prepares the statement (reusing an earlier preparation of the same CQL) and binds the values.
+    /// </summary>
+    /// <remarks>
+    ///     Preparing is what lets the driver compute the routing key from the bound partition key, which is how
+    ///     a statement reaches the node — and the shard — that owns the data instead of taking an extra hop.
+    /// </remarks>
+    Task<BoundStatement> BindAsync(string cql, object?[] values, CancellationToken cancellationToken = default);
+
+    /// <summary>
     ///     Applies the configured consistency, page size, execution profile and tracing to a statement.
     /// </summary>
     TStatement ApplyDefaults<TStatement>(TStatement statement)
@@ -63,6 +72,19 @@ public class ScyllaClientWrapper : IScyllaClientWrapper, IResettableService
         return _options.ExecutionProfile is { } executionProfile
             ? await session.ExecuteAsync(prepared, executionProfile).ConfigureAwait(false)
             : await session.ExecuteAsync(prepared).ConfigureAwait(false);
+    }
+
+    public virtual async Task<BoundStatement> BindAsync(
+        string cql,
+        object?[] values,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cql);
+        ArgumentNullException.ThrowIfNull(values);
+
+        var prepared = await _singletonWrapper.PrepareAsync(cql, cancellationToken).ConfigureAwait(false);
+
+        return prepared.Bind(values);
     }
 
     public virtual TStatement ApplyDefaults<TStatement>(TStatement statement)
