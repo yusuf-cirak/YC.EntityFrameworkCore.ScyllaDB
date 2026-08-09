@@ -9,8 +9,8 @@ A [ScyllaDB](https://www.scylladb.com/) database provider for Entity Framework C
 official [ScyllaDB C# driver](https://github.com/scylladb/csharp-driver).
 
 > **Status: pre-1.0.** The provider creates schema, writes, queries, pages, scaffolds a model from an existing
-> keyspace, and emits telemetry, with 104 unit tests and 48 functional tests passing against a real node. The
-> public API can still move before a 1.0 release. Follow the
+> keyspace, and emits telemetry, with a unit suite and a functional suite that runs against a real node both
+> green in CI. The public API can still move before a 1.0 release. Follow the
 > [releases](https://github.com/yusuf-cirak/YC.EntityFrameworkCore.ScyllaDB/releases).
 
 ## Requirements

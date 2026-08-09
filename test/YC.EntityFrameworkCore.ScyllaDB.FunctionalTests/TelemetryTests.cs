@@ -68,6 +68,24 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
         return (captured, listener);
     }
 
+    /// <summary>
+    ///     A listener whose <c>ActivityStopped</c> callback throws, simulating a broken exporter or processor.
+    /// </summary>
+    private static IDisposable ListenWithThrowingStop()
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ScyllaInstrumentation.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = _ => throw new InvalidOperationException(
+                "Simulated exporter failure; the query this describes must be unaffected by it.")
+        };
+
+        ActivitySource.AddActivityListener(listener);
+
+        return listener;
+    }
+
     public async ValueTask InitializeAsync()
     {
         await using var context = CreateContext();
@@ -250,6 +268,57 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
         var span = Assert.Single(captured, a => a.GetTagItem("error.type") is not null);
 
         Assert.Equal(ActivityStatusCode.Error, span.Status);
+    }
+
+    /// <summary>
+    ///     Pins the fix in <see cref="Storage.Internal.ScyllaClientWrapper" />'s <c>ExecuteAsync</c>: the
+    ///     activity is stopped explicitly, inside the method's own <c>finally</c>, through
+    ///     <see cref="ScyllaInstrumentation.StopActivity" />. It used to be stopped implicitly by a
+    ///     <c>using var activity = ScyllaInstrumentation.StartActivity(...)</c> declaration instead — but a
+    ///     <c>using var</c> declares its disposal in the <em>outermost</em> <c>finally</c> the compiler
+    ///     generates for the method, which sits outside the <c>try</c>/<c>catch</c>/<c>finally</c> written in
+    ///     the method body. Disposing an <see cref="Activity" /> is what runs a listener's
+    ///     <c>ActivityStopped</c> callback, so under the old code a throwing listener would have turned this
+    ///     otherwise-successful query into a faulted task. Reverting to <c>using var</c> makes this test fail.
+    /// </summary>
+    [Fact]
+    public async Task Successful_query_is_not_faulted_by_a_listener_that_throws_on_stop()
+    {
+        using var throwingListener = ListenWithThrowingStop();
+
+        await using var context = CreateContext();
+        var sensorId = Guid.NewGuid();
+
+        var readings = await context.Readings
+            .Where(r => r.SensorId == sensorId)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(readings);
+    }
+
+    /// <summary>
+    ///     The other half of the pair above, and the more valuable one: on a genuinely failed statement, the
+    ///     exception that reaches the caller must be the driver's own <see cref="Cassandra.DriverException" />,
+    ///     not whatever a broken listener raised from <c>ActivityStopped</c>. Under the old
+    ///     <c>using var activity = ScyllaInstrumentation.StartActivity(...)</c>, the implicit dispose ran in the
+    ///     method's outermost <c>finally</c> — after the <c>catch</c> block had already recorded the real
+    ///     exception — so a throwing listener there would have replaced the genuine
+    ///     <see cref="Cassandra.DriverException" /> with its own <see cref="InvalidOperationException" /> before
+    ///     it ever reached this test. Reverting <see cref="Storage.Internal.ScyllaClientWrapper" /> to
+    ///     <c>using var</c> makes this test fail with the listener's exception instead.
+    /// </summary>
+    [Fact]
+    public async Task Failed_statement_surfaces_its_own_exception_despite_a_listener_that_throws_on_stop()
+    {
+        using var throwingListener = ListenWithThrowingStop();
+
+        await using var context = CreateContext();
+        var client = context.GetService<Storage.Internal.IScyllaClientWrapper>();
+
+        await Assert.ThrowsAnyAsync<Cassandra.DriverException>(
+            () => client.ExecuteAsync(
+                new Cassandra.SimpleStatement($"SELECT * FROM {Keyspace}.does_not_exist"),
+                TestContext.Current.CancellationToken));
     }
 
     private static (List<(double Value, KeyValuePair<string, object?>[] Tags)> Measurements, MeterListener Listener)
