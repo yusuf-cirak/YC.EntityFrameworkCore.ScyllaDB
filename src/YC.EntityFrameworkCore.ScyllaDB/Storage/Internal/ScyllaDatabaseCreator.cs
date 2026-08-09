@@ -89,7 +89,8 @@ public class ScyllaDatabaseCreator : IDatabaseCreator
         await ExecuteDdlAsync(_ddlGenerator.CreateKeyspace(model, keyspace), cancellationToken)
             .ConfigureAwait(false);
 
-        foreach (var entityType in model.GetEntityTypes())
+        // Tables first: a materialized view cannot be created before the table it reads from exists.
+        foreach (var entityType in model.GetEntityTypes().Where(e => !e.IsMaterializedView()))
         {
             await ExecuteDdlAsync(_ddlGenerator.CreateTable(entityType), cancellationToken).ConfigureAwait(false);
 
@@ -97,6 +98,12 @@ public class ScyllaDatabaseCreator : IDatabaseCreator
             {
                 await ExecuteDdlAsync(createIndex, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        foreach (var view in model.GetEntityTypes().Where(e => e.IsMaterializedView()))
+        {
+            await ExecuteDdlAsync(_ddlGenerator.CreateMaterializedView(view), cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return created;

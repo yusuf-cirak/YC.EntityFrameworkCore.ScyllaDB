@@ -92,6 +92,14 @@ public static class ScyllaDmlGenerator
         ArgumentNullException.ThrowIfNull(entry);
 
         var entityType = entry.EntityType;
+
+        if (entityType.IsMaterializedView())
+        {
+            throw new InvalidOperationException(
+                ScyllaStrings.MaterializedViewIsReadOnly(
+                    entityType.DisplayName(), entityType.GetScyllaTableName()));
+        }
+
         var keyProperties = KeyProperties(entityType);
 
         return entry.EntityState switch

@@ -113,6 +113,14 @@ internal static class ScyllaStrings
         => $"A range comparison is only valid on the last restricted clustering column. '{column}' uses one, "
            + $"but '{lastRestricted}' is restricted after it.";
 
+    public static string NotAMaterializedView(string entityType)
+        => $"Entity type '{entityType}' is not mapped to a materialized view.";
+
+    public static string MaterializedViewIsReadOnly(string entityType, string view)
+        => $"Entity type '{entityType}' is mapped to materialized view '{view}', which ScyllaDB maintains from "
+           + "its base table and will not accept writes to. Write to the entity type mapped to that base table "
+           + "instead.";
+
     public static string IndexOnUnknownProperty(string entityType, string property)
         => $"A secondary index on '{entityType}' names property '{property}', which is not mapped.";
 

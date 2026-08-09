@@ -186,7 +186,30 @@ narrowing the `SELECT`, paging walking a result set without overlap, and an inde
 **Skipped:** `PER PARTITION LIMIT` (no public API reaches it, so the generator support was removed rather than
 left unreachable) and materialized views.
 
-## Phases 7–8
+## Phase 7 — Materialized views and scaffolding ✅
 
-Materialized views and `PER PARTITION LIMIT` → scaffolding from `system_schema` → sample, `FEATURES.md`,
-and 0.1.0.
+- [x] `ToMaterializedView(view, baseTable)` — DDL with `IS NOT NULL` guards, created after its base table,
+      writes refused
+- [x] `ScyllaScaffolder.GenerateAsync(session, keyspace)` — reads `system_schema` and emits entity types plus a
+      `DbContext`
+
+**Verified:** build clean across 5 projects, 0 warnings. 96 unit tests, 39 functional tests — a view queried by
+its own partition key, a view reflecting a write to its base table, a write to a view refused, and a scaffolding
+round-trip that reproduces the keys and the view mapping.
+
+**Findings:**
+- **EF Core's reverse-engineering pipeline is relational-only.** `IDatabaseModelFactory` and `DatabaseModel`
+  live in `Microsoft.EntityFrameworkCore.Relational`, and model tables, columns and foreign keys — there is no
+  way to express a partition key or a clustering order. Scaffolding through `dotnet ef dbcontext scaffold` would
+  therefore both reintroduce the dependency the provider avoids and produce a model missing the parts that
+  decide whether a table can be queried. The scaffolder reads `system_schema` directly instead.
+- A materialized view needs an `IS NOT NULL` guard on every key column: a view row can only exist when all of
+  its key columns do.
+- Views must be created after their base tables, so `EnsureCreatedAsync` orders the two passes.
+
+## Phase 8 — Release
+
+- [ ] Sample project exercising the provider end to end
+- [ ] `FEATURES.md` — the supported and unsupported matrix
+- [ ] `PER PARTITION LIMIT`, deferred from Phase 6
+- [ ] 0.1.0

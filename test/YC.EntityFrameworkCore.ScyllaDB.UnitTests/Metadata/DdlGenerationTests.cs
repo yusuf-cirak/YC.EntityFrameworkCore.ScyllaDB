@@ -171,6 +171,48 @@ public class DdlGenerationTests
             Assert.Single(context.GetService<IScyllaDdlGenerator>().CreateIndexes(entityType)));
     }
 
+    /// <summary>
+    ///     Every key column needs an <c>IS NOT NULL</c> guard: a view row can only exist when all of its key
+    ///     columns do, so ScyllaDB requires the predicate to be spelled out.
+    /// </summary>
+    [Fact]
+    public void Materialized_view_guards_every_key_column_against_null()
+    {
+        using var context = ScyllaModelFixture.CreateContext(
+            b =>
+            {
+                b.Entity<Reading>(e =>
+                {
+                    e.ToScyllaTable("readings");
+                    e.HasPartitionKey(r => r.SensorId);
+                    e.HasClusteringKey(r => r.RecordedAt);
+                });
+
+                b.Entity<Event>(e =>
+                {
+                    e.ToMaterializedView("readings_by_status", "readings");
+                    e.HasPartitionKey(x => x.TenantId);
+                    e.HasClusteringKey(x => x.OccurredAt, ScyllaClusteringOrder.Descending);
+                    e.Ignore(x => x.TenantName);
+                    e.Ignore(x => x.Payload);
+                    e.Ignore(x => x.Bucket);
+                });
+            });
+
+        var view = context.Model.FindEntityType(typeof(Event))!;
+        var cql = context.GetService<IScyllaDdlGenerator>().CreateMaterializedView(view);
+
+        Assert.Contains(
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS \"test_keyspace\".\"readings_by_status\"",
+            cql,
+            StringComparison.Ordinal);
+        Assert.Contains("FROM \"test_keyspace\".\"readings\"", cql, StringComparison.Ordinal);
+        Assert.Contains(
+            "WHERE \"TenantId\" IS NOT NULL AND \"OccurredAt\" IS NOT NULL", cql, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY KEY ((\"TenantId\"), \"OccurredAt\")", cql, StringComparison.Ordinal);
+        Assert.Contains("CLUSTERING ORDER BY (\"OccurredAt\" DESC)", cql, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Create_keyspace_defaults_to_a_single_replica()
     {

@@ -24,6 +24,8 @@ public interface IScyllaDdlGenerator
     string DropTable(IEntityType entityType);
 
     IReadOnlyList<string> CreateIndexes(IEntityType entityType);
+
+    string CreateMaterializedView(IEntityType entityType);
 }
 
 /// <inheritdoc cref="IScyllaDdlGenerator" />
@@ -127,6 +129,58 @@ public class ScyllaDdlGenerator : IScyllaDdlGenerator
         ArgumentNullException.ThrowIfNull(entityType);
 
         return $"DROP TABLE IF EXISTS {QualifiedName(entityType)}";
+    }
+
+    /// <summary>
+    ///     Builds the <c>CREATE MATERIALIZED VIEW</c> for a view-mapped entity type.
+    /// </summary>
+    /// <remarks>
+    ///     Every key column needs an <c>IS NOT NULL</c> guard. ScyllaDB requires it because a view row can only
+    ///     exist when all of its key columns do — a base row with a null in one of them simply has no place in
+    ///     the view.
+    /// </remarks>
+    public virtual string CreateMaterializedView(IEntityType entityType)
+    {
+        ArgumentNullException.ThrowIfNull(entityType);
+
+        var baseTable = entityType.GetMaterializedViewBaseTable()
+                        ?? throw new InvalidOperationException(
+                            ScyllaStrings.NotAMaterializedView(entityType.DisplayName()));
+
+        var partitionKeys = entityType.GetPartitionKeyProperties();
+        var clusteringKeys = entityType.GetClusteringKeyProperties();
+
+        if (partitionKeys.Count == 0)
+        {
+            throw new InvalidOperationException(ScyllaStrings.NoPartitionKey(entityType.DisplayName()));
+        }
+
+        var keyspace = Quote(entityType.GetKeyspace()!);
+        var keyColumns = partitionKeys.Concat(clusteringKeys).ToList();
+
+        var builder = new StringBuilder("CREATE MATERIALIZED VIEW IF NOT EXISTS ")
+            .Append(QualifiedName(entityType))
+            .AppendLine(" AS")
+            .Append("SELECT ")
+            .AppendJoin(", ", entityType.GetProperties().Select(p => Quote(p.GetColumnName())))
+            .AppendLine()
+            .Append("FROM ").Append(keyspace).Append('.').AppendLine(Quote(baseTable))
+            .Append("WHERE ")
+            .AppendJoin(" AND ", keyColumns.Select(p => $"{Quote(p.GetColumnName())} IS NOT NULL"))
+            .AppendLine()
+            .Append("PRIMARY KEY (")
+            .Append(PrimaryKeyDefinition(partitionKeys, clusteringKeys))
+            .Append(')');
+
+        if (clusteringKeys.Count > 0)
+        {
+            var orders = clusteringKeys.Select(
+                p => $"{Quote(p.GetColumnName())} {(p.GetClusteringOrder() == ScyllaClusteringOrder.Descending ? "DESC" : "ASC")}");
+
+            builder.Append(" WITH CLUSTERING ORDER BY (").AppendJoin(", ", orders).Append(')');
+        }
+
+        return builder.ToString();
     }
 
     public virtual IReadOnlyList<string> CreateIndexes(IEntityType entityType)

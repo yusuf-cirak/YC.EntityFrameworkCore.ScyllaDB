@@ -24,4 +24,5 @@ public static class ScyllaAnnotationNames
     public const string CollectionKind = Prefix + "CollectionKind";
     public const string InsertIfNotExists = Prefix + "Lwt:InsertIfNotExists";
     public const string Indexes = Prefix + "Indexes";
+    public const string MaterializedViewBaseTable = Prefix + "MaterializedView:BaseTable";
 }

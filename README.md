@@ -109,6 +109,31 @@ var page = await context.Readings
 `page.ContinuationToken` fetches the next page. It is **not signed or encrypted** — a tampered token can read
 other partitions, so sign it before handing it to an untrusted client.
 
+### Materialized views
+
+The answer to "the same rows, keyed differently" — ScyllaDB keeps the view in step with its base table, so the
+view is read-only and writing to it throws.
+
+```csharp
+modelBuilder.Entity<ReadingByStatus>(e =>
+{
+    e.ToMaterializedView("readings_by_status", baseTableName: "readings");
+    e.HasPartitionKey(r => r.Status);
+    e.HasClusteringKey(r => r.RecordedAt, ScyllaClusteringOrder.Descending);
+});
+```
+
+### Generating a model from an existing keyspace
+
+```csharp
+var source = await ScyllaScaffolder.GenerateAsync(session, "metrics");
+```
+
+Returns C# for the entity types and a `DbContext`, read from `system_schema`. It is deliberately not wired into
+`dotnet ef dbcontext scaffold`: EF Core's reverse-engineering pipeline lives in the relational package and is
+built around tables, columns and foreign keys, with no way to express a partition key or a clustering order —
+the parts that decide whether a CQL table can be queried at all.
+
 ### Seeing the CQL
 
 ```csharp

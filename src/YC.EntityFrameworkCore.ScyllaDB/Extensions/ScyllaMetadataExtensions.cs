@@ -99,6 +99,21 @@ public static class ScyllaEntityTypeExtensions
         => entityType.SetOrRemoveAnnotation(ScyllaAnnotationNames.InsertIfNotExists, useLwt);
 
     /// <summary>
+    ///     The table this materialized view reads from, or null when the entity type is an ordinary table.
+    /// </summary>
+    public static string? GetMaterializedViewBaseTable(this IReadOnlyEntityType entityType)
+        => (string?)entityType.FindAnnotation(ScyllaAnnotationNames.MaterializedViewBaseTable)?.Value;
+
+    public static void SetMaterializedViewBaseTable(this IMutableEntityType entityType, string? baseTable)
+        => entityType.SetOrRemoveAnnotation(ScyllaAnnotationNames.MaterializedViewBaseTable, baseTable);
+
+    /// <summary>
+    ///     Whether this entity type maps to a materialized view, which ScyllaDB maintains and refuses writes to.
+    /// </summary>
+    public static bool IsMaterializedView(this IReadOnlyEntityType entityType)
+        => entityType.GetMaterializedViewBaseTable() is not null;
+
+    /// <summary>
     ///     The secondary indexes declared on this table.
     /// </summary>
     public static IReadOnlyList<ScyllaIndex> GetScyllaIndexes(this IReadOnlyEntityType entityType)

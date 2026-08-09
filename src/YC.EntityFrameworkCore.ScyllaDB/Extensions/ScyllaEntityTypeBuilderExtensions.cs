@@ -133,6 +133,45 @@ public static class ScyllaEntityTypeBuilderExtensions
     }
 
     /// <summary>
+    ///     Maps this entity type to a materialized view over another table.
+    /// </summary>
+    /// <param name="builder">The entity type builder.</param>
+    /// <param name="viewName">The view's name.</param>
+    /// <param name="baseTableName">The table the view reads from.</param>
+    /// <param name="keyspace">The keyspace, when it differs from the model's default.</param>
+    /// <remarks>
+    ///     <para>
+    ///         A materialized view is ScyllaDB's answer to "the same rows, keyed differently". The server keeps
+    ///         it in step with the base table, so the view is read-only: writing to it throws.
+    ///     </para>
+    ///     <para>
+    ///         The view's own key must contain every column of the base table's primary key, in some order, or
+    ///         ScyllaDB will refuse to create it — the view has to be able to find the row it came from.
+    ///     </para>
+    /// </remarks>
+    public static EntityTypeBuilder<TEntity> ToMaterializedView<TEntity>(
+        this EntityTypeBuilder<TEntity> builder,
+        string viewName,
+        string baseTableName,
+        string? keyspace = null)
+        where TEntity : class
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseTableName);
+
+        builder.Metadata.SetScyllaTableName(viewName);
+        builder.Metadata.SetMaterializedViewBaseTable(baseTableName);
+
+        if (keyspace is not null)
+        {
+            builder.Metadata.SetKeyspace(keyspace);
+        }
+
+        return builder;
+    }
+
+    /// <summary>
     ///     Declares a secondary index on a column, so it can be restricted without a full scan.
     /// </summary>
     /// <remarks>
