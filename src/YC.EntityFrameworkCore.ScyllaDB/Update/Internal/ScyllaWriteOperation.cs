@@ -16,11 +16,18 @@ namespace YC.EntityFrameworkCore.ScyllaDB.Update.Internal;
 ///     Identifies the partition, so writes that share one can be batched atomically.
 /// </param>
 /// <param name="IsCounter">Counter writes cannot be mixed with ordinary ones in a batch.</param>
+/// <param name="IsConditional">
+///     Whether this is a lightweight transaction. Those run through Paxos, are restricted to one partition, and
+///     report whether they applied — so they are executed on their own and their result is inspected.
+/// </param>
+/// <param name="Entry">The tracked entry, needed to report a concurrency conflict against it.</param>
 public sealed record ScyllaWriteOperation(
     string Cql,
     object?[] Values,
     ScyllaPartitionKey PartitionKey,
-    bool IsCounter);
+    bool IsCounter,
+    bool IsConditional = false,
+    IUpdateEntry? Entry = null);
 
 /// <summary>
 ///     A table plus a set of partition key values, compared by value.
@@ -80,7 +87,7 @@ public static class ScyllaDmlGenerator
     ///     CQL <c>INSERT</c> and <c>UPDATE</c> are both blind upserts, so the distinction here is only about
     ///     which columns are sent, never about whether the row already exists.
     /// </remarks>
-    public static ScyllaWriteOperation Create(IUpdateEntry entry)
+    public static ScyllaWriteOperation Create(IUpdateEntry entry, ScyllaWriteOptions? writeOptions = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -90,20 +97,24 @@ public static class ScyllaDmlGenerator
         return entry.EntityState switch
         {
             EntityState.Added when entityType.IsCounterTable() => CounterUpdate(entry, keyProperties, isNewRow: true),
-            EntityState.Added => Insert(entry, keyProperties),
+            EntityState.Added => Insert(entry, keyProperties, writeOptions),
             EntityState.Modified when entityType.IsCounterTable() => CounterUpdate(entry, keyProperties, isNewRow: false),
-            EntityState.Modified => Update(entry, keyProperties),
-            EntityState.Deleted => Delete(entry, keyProperties),
+            EntityState.Modified => Update(entry, keyProperties, writeOptions),
+            EntityState.Deleted => Delete(entry, keyProperties, writeOptions),
             _ => throw new InvalidOperationException(
                 $"Entity state '{entry.EntityState}' does not produce a write.")
         };
     }
 
-    private static ScyllaWriteOperation Insert(IUpdateEntry entry, IReadOnlyList<IProperty> keyProperties)
+    private static ScyllaWriteOperation Insert(
+        IUpdateEntry entry,
+        IReadOnlyList<IProperty> keyProperties,
+        ScyllaWriteOptions? writeOptions)
     {
         var entityType = entry.EntityType;
         var properties = entityType.GetProperties().ToList();
-        var values = new object?[properties.Count];
+        var conditional = entityType.UsesInsertIfNotExists();
+        var values = new List<object?>(properties.Count + 2);
 
         var builder = new StringBuilder("INSERT INTO ")
             .Append(QualifiedName(entityType))
@@ -117,18 +128,28 @@ public static class ScyllaDmlGenerator
             }
 
             builder.Append(Quote(properties[i].GetColumnName()));
-            values[i] = ProviderValue(entry, properties[i]);
+            values.Add(ProviderValue(entry, properties[i]));
         }
 
         builder.Append(") VALUES (")
             .AppendJoin(", ", Enumerable.Repeat("?", properties.Count))
             .Append(')');
 
+        if (conditional)
+        {
+            builder.Append(" IF NOT EXISTS");
+        }
+
+        AppendUsing(builder, values, writeOptions, conditional, allowTimeToLive: true);
+
         return new ScyllaWriteOperation(
-            builder.ToString(), values, PartitionKeyOf(entry), IsCounter: false);
+            builder.ToString(), [.. values], PartitionKeyOf(entry), IsCounter: false, conditional, entry);
     }
 
-    private static ScyllaWriteOperation Update(IUpdateEntry entry, IReadOnlyList<IProperty> keyProperties)
+    private static ScyllaWriteOperation Update(
+        IUpdateEntry entry,
+        IReadOnlyList<IProperty> keyProperties,
+        ScyllaWriteOptions? writeOptions)
     {
         var entityType = entry.EntityType;
         var keyNames = keyProperties.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
@@ -142,14 +163,18 @@ public static class ScyllaDmlGenerator
             // Nothing but key columns changed, which in CQL is not a change at all — the key *is* the row's
             // identity. Re-inserting the key would be a no-op write, so send one anyway rather than special-case
             // an empty statement downstream.
-            return Insert(entry, keyProperties);
+            return Insert(entry, keyProperties, writeOptions);
         }
 
-        var values = new List<object?>(modified.Count + keyProperties.Count);
+        var tokens = ConcurrencyTokens(entityType);
+        var values = new List<object?>(modified.Count + keyProperties.Count + tokens.Count + 2);
 
-        var builder = new StringBuilder("UPDATE ")
-            .Append(QualifiedName(entityType))
-            .Append(" SET ");
+        var builder = new StringBuilder("UPDATE ").Append(QualifiedName(entityType));
+
+        // The USING clause precedes SET in CQL, and markers bind in text order, so its values go in first.
+        AppendUsing(builder, values, writeOptions, tokens.Count > 0, allowTimeToLive: true);
+
+        builder.Append(" SET ");
 
         for (var i = 0; i < modified.Count; i++)
         {
@@ -163,21 +188,111 @@ public static class ScyllaDmlGenerator
         }
 
         AppendKeyPredicate(builder, entry, keyProperties, values);
+        AppendConcurrencyCondition(builder, entry, tokens, values);
 
         return new ScyllaWriteOperation(
-            builder.ToString(), [.. values], PartitionKeyOf(entry), IsCounter: false);
+            builder.ToString(), [.. values], PartitionKeyOf(entry), IsCounter: false, tokens.Count > 0, entry);
     }
 
-    private static ScyllaWriteOperation Delete(IUpdateEntry entry, IReadOnlyList<IProperty> keyProperties)
+    private static ScyllaWriteOperation Delete(
+        IUpdateEntry entry,
+        IReadOnlyList<IProperty> keyProperties,
+        ScyllaWriteOptions? writeOptions)
     {
-        var values = new List<object?>(keyProperties.Count);
+        var tokens = ConcurrencyTokens(entry.EntityType);
+        var values = new List<object?>(keyProperties.Count + tokens.Count + 1);
 
         var builder = new StringBuilder("DELETE FROM ").Append(QualifiedName(entry.EntityType));
 
+        // CQL rejects TTL on a delete: there is nothing left to expire.
+        AppendUsing(builder, values, writeOptions, tokens.Count > 0, allowTimeToLive: false);
+
         AppendKeyPredicate(builder, entry, keyProperties, values);
+        AppendConcurrencyCondition(builder, entry, tokens, values);
 
         return new ScyllaWriteOperation(
-            builder.ToString(), [.. values], PartitionKeyOf(entry), IsCounter: false);
+            builder.ToString(), [.. values], PartitionKeyOf(entry), IsCounter: false, tokens.Count > 0, entry);
+    }
+
+    private static IReadOnlyList<IProperty> ConcurrencyTokens(IEntityType entityType)
+        => [.. entityType.GetProperties().Where(p => p.IsConcurrencyToken)];
+
+    /// <summary>
+    ///     Appends <c>USING TTL ... AND TIMESTAMP ...</c> when write options ask for it.
+    /// </summary>
+    private static void AppendUsing(
+        StringBuilder builder,
+        List<object?> values,
+        ScyllaWriteOptions? writeOptions,
+        bool isConditional,
+        bool allowTimeToLive)
+    {
+        var timeToLive = allowTimeToLive ? writeOptions?.TimeToLive : null;
+        var timestamp = writeOptions?.Timestamp;
+
+        if (timestamp is not null && isConditional)
+        {
+            // Paxos assigns its own timestamps to keep the ballot ordering sound, so ScyllaDB rejects a custom
+            // one outright. Saying so here beats surfacing the server's terser complaint.
+            throw new InvalidOperationException(ScyllaStrings.TimestampWithLightweightTransaction());
+        }
+
+        if (timeToLive is null && timestamp is null)
+        {
+            return;
+        }
+
+        builder.Append(" USING ");
+
+        if (timeToLive is { } ttl)
+        {
+            builder.Append("TTL ?");
+            values.Add((int)ttl.TotalSeconds);
+        }
+
+        if (timestamp is { } at)
+        {
+            builder.Append(timeToLive is null ? "TIMESTAMP ?" : " AND TIMESTAMP ?");
+            values.Add(at.ToUnixTimeMilliseconds() * 1000);
+        }
+    }
+
+    /// <summary>
+    ///     Appends the <c>IF</c> clause that turns the write into a lightweight transaction.
+    /// </summary>
+    /// <remarks>
+    ///     This is the only optimistic concurrency CQL can offer. An ordinary write is a blind upsert with no
+    ///     affected-row count, so EF Core's usual "zero rows changed means someone else won" cannot work.
+    /// </remarks>
+    private static void AppendConcurrencyCondition(
+        StringBuilder builder,
+        IUpdateEntry entry,
+        IReadOnlyList<IProperty> tokens,
+        List<object?> values)
+    {
+        if (tokens.Count == 0)
+        {
+            return;
+        }
+
+        builder.Append(" IF ");
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(" AND ");
+            }
+
+            builder.Append(Quote(tokens[i].GetColumnName())).Append(" = ?");
+
+            var original = entry.GetOriginalValue(tokens[i]);
+
+            values.Add(
+                tokens[i].GetTypeMapping().Converter is { } converter
+                    ? converter.ConvertToProvider(original)
+                    : original);
+        }
     }
 
     /// <summary>

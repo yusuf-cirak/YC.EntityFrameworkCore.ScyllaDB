@@ -133,6 +133,26 @@ public static class ScyllaEntityTypeBuilderExtensions
     }
 
     /// <summary>
+    ///     Makes inserts conditional on the row not already existing.
+    /// </summary>
+    /// <remarks>
+    ///     CQL inserts are blind upserts, so without this an insert silently overwrites an existing row.
+    ///     Turning it on makes the write a lightweight transaction: correct, but roughly four times the cost,
+    ///     since it runs a Paxos round.
+    /// </remarks>
+    public static EntityTypeBuilder<TEntity> UseInsertIfNotExists<TEntity>(
+        this EntityTypeBuilder<TEntity> builder,
+        bool useLightweightTransaction = true)
+        where TEntity : class
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Metadata.SetUsesInsertIfNotExists(useLightweightTransaction);
+
+        return builder;
+    }
+
+    /// <summary>
     ///     Sets the table's <c>default_time_to_live</c>, after which rows expire on their own.
     /// </summary>
     public static EntityTypeBuilder<TEntity> HasDefaultTimeToLive<TEntity>(

@@ -18,21 +18,25 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
 {
     private readonly IScyllaClientWrapper _clientWrapper;
     private readonly IScyllaSingletonOptions _options;
+    private readonly IScyllaWriteOptionsAccessor _writeOptions;
     private readonly IDiagnosticsLogger<DbLoggerCategory.Update> _updateLogger;
 
     public ScyllaDatabaseWrapper(
         DatabaseDependencies dependencies,
         IScyllaClientWrapper clientWrapper,
         IScyllaSingletonOptions options,
+        IScyllaWriteOptionsAccessor writeOptions,
         IDiagnosticsLogger<DbLoggerCategory.Update> updateLogger)
         : base(dependencies)
     {
         ArgumentNullException.ThrowIfNull(clientWrapper);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(writeOptions);
         ArgumentNullException.ThrowIfNull(updateLogger);
 
         _clientWrapper = clientWrapper;
         _options = options;
+        _writeOptions = writeOptions;
         _updateLogger = updateLogger;
     }
 
@@ -69,7 +73,22 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
             return 0;
         }
 
-        var operations = entries.Select(ScyllaDmlGenerator.Create).ToList();
+        var writeOptions = _writeOptions.Current;
+        var allOperations = entries.Select(e => ScyllaDmlGenerator.Create(e, writeOptions)).ToList();
+
+        // Lightweight transactions run through Paxos, are confined to one partition, and report whether they
+        // applied. They cannot share a batch with anything, so each goes on its own and its result is checked.
+        foreach (var conditional in allOperations.Where(o => o.IsConditional))
+        {
+            await ExecuteConditionalAsync(conditional, cancellationToken).ConfigureAwait(false);
+        }
+
+        var operations = allOperations.Where(o => !o.IsConditional).ToList();
+
+        if (operations.Count == 0)
+        {
+            return allOperations.Count;
+        }
 
         var partitionGroups = operations
             .GroupBy(o => o.PartitionKey)
@@ -84,7 +103,7 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
         if (_options.BatchMode == ScyllaBatchMode.Logged && operations.Count > 1)
         {
             await ExecuteBatchAsync(operations, BatchType.Logged, cancellationToken).ConfigureAwait(false);
-            return operations.Count;
+            return allOperations.Count;
         }
 
         // Bounded so that a large SaveChangesAsync cannot flood the cluster's request queue.
@@ -94,8 +113,65 @@ public class ScyllaDatabaseWrapper : Database, IResettableService
                 partitionGroups.Select(group => ExecutePartitionAsync(group, concurrency, cancellationToken)))
             .ConfigureAwait(false);
 
-        return operations.Count;
+        return allOperations.Count;
     }
+
+    /// <summary>
+    ///     Runs a lightweight transaction and turns a rejected write into a concurrency exception.
+    /// </summary>
+    /// <remarks>
+    ///     This is the only optimistic concurrency ScyllaDB can offer. An ordinary CQL write is a blind upsert
+    ///     that reports no affected-row count, so EF Core's usual "zero rows changed means someone else won"
+    ///     detection has nothing to observe. A conditional write instead returns an <c>[applied]</c> column,
+    ///     along with the row's current values when it did not apply.
+    /// </remarks>
+    private async Task ExecuteConditionalAsync(
+        ScyllaWriteOperation operation,
+        CancellationToken cancellationToken)
+    {
+        var statement = await _clientWrapper.BindAsync(operation.Cql, operation.Values, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Paxos rounds must not be replayed blindly.
+        statement.SetIdempotence(false);
+
+        if (_options.SerialConsistencyLevel is { } serialConsistency)
+        {
+            statement.SetSerialConsistencyLevel(serialConsistency);
+        }
+
+        var rowSet = await _clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+        var row = rowSet.FirstOrDefault();
+
+        if (row is not null && row.GetValue<bool>("[applied]"))
+        {
+            return;
+        }
+
+        var entityType = operation.Entry?.EntityType.DisplayName() ?? "the table";
+
+        // A rejected write comes back with the row that won. For a failed IF NOT EXISTS that is the row that
+        // was already there; for a failed condition it is the primary key plus the columns the condition
+        // named — not the whole row, which is why the message quotes only what the server returned.
+        var current = row is null ? "unavailable" : DescribeRow(rowSet, row);
+
+        throw new DbUpdateConcurrencyException(
+            operation.Entry?.EntityState == EntityState.Added
+                ? ScyllaStrings.InsertIfNotExistsFailed(entityType, current)
+                : ScyllaStrings.ConcurrencyConditionFailed(entityType, current),
+            operation.Entry is null ? [] : [operation.Entry]);
+    }
+
+    /// <summary>
+    ///     Formats the row ScyllaDB returns alongside a rejected conditional write, which carries the values
+    ///     that actually won.
+    /// </summary>
+    private static string DescribeRow(RowSet rowSet, Row row)
+        => string.Join(
+            ", ",
+            rowSet.Columns
+                .Where(c => !string.Equals(c.Name, "[applied]", StringComparison.Ordinal))
+                .Select(c => $"{c.Name} = {row.GetValue<object>(c.Name) ?? "null"}"));
 
     private async Task ExecutePartitionAsync(
         IEnumerable<ScyllaWriteOperation> partition,

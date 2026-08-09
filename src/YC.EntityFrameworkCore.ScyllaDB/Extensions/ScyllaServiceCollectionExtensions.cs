@@ -8,6 +8,7 @@ using YC.EntityFrameworkCore.ScyllaDB.Infrastructure.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Metadata.Conventions;
 using YC.EntityFrameworkCore.ScyllaDB.Query.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
+using YC.EntityFrameworkCore.ScyllaDB.Update.Internal;
 
 // ReSharper disable once CheckNamespace
 namespace Microsoft.Extensions.DependencyInjection;
@@ -49,7 +50,8 @@ public static class ScyllaServiceCollectionExtensions
                     .TryAddSingleton<IScyllaSingletonOptions, ScyllaSingletonOptions>()
                     .TryAddSingleton<IScyllaSingletonClientWrapper, ScyllaSingletonClientWrapper>()
                     .TryAddScoped<IScyllaClientWrapper, ScyllaClientWrapper>()
-                    .TryAddSingleton<IScyllaDdlGenerator, ScyllaDdlGenerator>())
+                    .TryAddSingleton<IScyllaDdlGenerator, ScyllaDdlGenerator>()
+                    .TryAddScoped<IScyllaWriteOptionsAccessor, ScyllaWriteOptionsAccessor>())
             .TryAddCoreServices();
 
         return services;

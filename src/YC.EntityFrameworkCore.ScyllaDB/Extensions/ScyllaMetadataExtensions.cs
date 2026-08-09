@@ -88,6 +88,15 @@ public static class ScyllaEntityTypeExtensions
     /// </summary>
     public static bool IsCounterTable(this IReadOnlyEntityType entityType)
         => entityType.GetProperties().Any(p => p.IsCounter());
+
+    /// <summary>
+    ///     Whether inserts become <c>IF NOT EXISTS</c> lightweight transactions.
+    /// </summary>
+    public static bool UsesInsertIfNotExists(this IReadOnlyEntityType entityType)
+        => (bool?)entityType.FindAnnotation(ScyllaAnnotationNames.InsertIfNotExists)?.Value ?? false;
+
+    public static void SetUsesInsertIfNotExists(this IMutableEntityType entityType, bool? useLwt)
+        => entityType.SetOrRemoveAnnotation(ScyllaAnnotationNames.InsertIfNotExists, useLwt);
 }
 
 /// <inheritdoc cref="ScyllaModelExtensions" />

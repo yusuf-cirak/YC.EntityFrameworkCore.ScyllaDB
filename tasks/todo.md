@@ -135,13 +135,34 @@ variables as parameters, `ALLOW FILTERING`, and the refusal of synchronous enume
 **Not translated yet, each with its own message:** projections (`Select` of anything but the entity), `Skip`,
 `GroupBy`, joins, set operations, `Sum`/`Min`/`Max`/`Average`/`All`, `Distinct`, `Reverse`, `Last`, `OR`, `!=`.
 
-## Phase 5 — Scylla-specific writes
+## Phase 5 — Scylla-specific writes ✅
 
-- [ ] `USING TTL` and `USING TIMESTAMP` on writes
-- [ ] Lightweight transactions as the concurrency-token mechanism, checking `[applied]`
-- [ ] `WRITETIME()` / `TTL()` read functions
+- [x] `ScyllaWriteOptions` + `context.UseScyllaWriteOptions(...)` scope → `USING TTL` / `USING TIMESTAMP`
+- [x] `IsConcurrencyToken()` → `UPDATE ... IF col = ?` and `DELETE ... IF col = ?`
+- [x] `UseInsertIfNotExists()` → `INSERT ... IF NOT EXISTS`
+- [x] Conditional writes execute standalone, `[applied]` checked, `DbUpdateConcurrencyException` carries the
+      values that won
+
+**Verified:** build clean across 5 projects, 0 warnings. 92 unit tests, 30 functional tests — a duplicate
+conditional insert rejected, a stale concurrency token losing the race, a matching token applying, and rows
+actually expiring when their time is up.
+
+**Findings:**
+- A failed `IF NOT EXISTS` still returns a row — the one that was already there — so "did a row come back?" is
+  the wrong test for which failure occurred. The entity state distinguishes them.
+- A failed conditional update returns the primary key plus only the columns the `IF` clause named, not the whole
+  row, so the exception can quote the winning version but not the winning body.
+- `USING` precedes `SET` in a CQL update, and bind markers are positional, so the TTL and timestamp values have
+  to be added to the list before the assignments.
+- CQL rejects a custom write timestamp on a conditional write, because Paxos assigns its own to keep ballots
+  ordered. The provider refuses it up front with that explanation.
+- TTL is not valid on a delete — there is nothing left to expire — so it is dropped there while the timestamp
+  is kept.
+
+**Skipped:** `WRITETIME()` / `TTL()` read functions, which need projections to be useful; per-entity write
+options, since the scope plus table-level `default_time_to_live` cover the common cases.
 
 ## Phases 6–8
 
-See the plan file. Order: query ergonomics (cursor paging, indexes, materialized views, `PER PARTITION LIMIT`,
-projections) → scaffolding → docs and 0.1.0.
+See the plan file. Order: query ergonomics (projections, cursor paging, indexes, materialized views,
+`PER PARTITION LIMIT`) → scaffolding → docs and 0.1.0.

@@ -135,6 +135,19 @@ internal static class ScyllaStrings
            + $"or its exact reverse. The requested order was {string.Join(", ", requested)}. Rows are stored in "
            + "clustering order, so the engine can walk them forwards or backwards and nothing else.";
 
+    public static string TimestampWithLightweightTransaction()
+        => "A write timestamp cannot be set on a conditional write. Lightweight transactions order themselves "
+           + "through Paxos and assign their own timestamps, so ScyllaDB rejects a custom one. Drop the "
+           + "timestamp, or drop the concurrency token that made the write conditional.";
+
+    public static string ConcurrencyConditionFailed(string entityType, string currentValues)
+        => $"The conditional write to '{entityType}' was not applied: another writer changed the row first. "
+           + $"Current database values: {currentValues}.";
+
+    public static string InsertIfNotExistsFailed(string entityType, string currentValues)
+        => $"The row already exists, so the conditional insert into '{entityType}' was not applied. Existing "
+           + $"row: {currentValues}.";
+
     public static string CounterUnchanged(string entityType)
         => $"An entry of counter table '{entityType}' was marked as changed, but no counter moved. CQL can only "
            + "increment a counter, so there is nothing to send. Change a counter value, or leave the entry "
