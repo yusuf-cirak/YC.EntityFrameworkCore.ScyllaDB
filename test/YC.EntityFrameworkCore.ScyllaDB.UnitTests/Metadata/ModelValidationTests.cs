@@ -125,6 +125,41 @@ public class ModelValidationTests
         Assert.Null(exception);
     }
 
+    /// <summary>
+    ///     ScyllaDB orders lightweight transactions only against each other, so a partition also written by
+    ///     ordinary inserts sits outside that guarantee: a later <c>IF</c> can match a value the row has already
+    ///     moved past, and the concurrency check passes when it should have failed. The failure is silent and
+    ///     intermittent, which is why the pairing is required rather than merely suggested.
+    /// </summary>
+    [Fact]
+    public void Concurrency_token_without_a_conditional_insert_is_rejected()
+    {
+        var exception = ScyllaModelFixture.CaptureModelError(
+            b => b.Entity<Reading>(e =>
+            {
+                e.HasPartitionKey(r => r.SensorId);
+                e.Property(r => r.Status).IsConcurrencyToken();
+            }));
+
+        Assert.NotNull(exception);
+        Assert.Contains("lightweight transactions only against each other", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("UseInsertIfNotExists()", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Concurrency_token_paired_with_a_conditional_insert_is_accepted()
+    {
+        var exception = ScyllaModelFixture.CaptureModelError(
+            b => b.Entity<Reading>(e =>
+            {
+                e.HasPartitionKey(r => r.SensorId);
+                e.Property(r => r.Status).IsConcurrencyToken();
+                e.UseInsertIfNotExists();
+            }));
+
+        Assert.Null(exception);
+    }
+
     [Fact]
     public void Counter_table_cannot_declare_a_default_time_to_live()
     {

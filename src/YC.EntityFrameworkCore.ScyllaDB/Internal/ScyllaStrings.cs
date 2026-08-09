@@ -151,6 +151,13 @@ internal static class ScyllaStrings
            + $"or its exact reverse. The requested order was {string.Join(", ", requested)}. Rows are stored in "
            + "clustering order, so the engine can walk them forwards or backwards and nothing else.";
 
+    public static string ConcurrencyTokenNeedsConditionalInsert(string entityType, string property)
+        => $"Entity type '{entityType}' uses '{property}' as a concurrency token but inserts rows with an "
+           + "ordinary write. ScyllaDB orders lightweight transactions only against each other, so a partition "
+           + "that is also written outside Paxos falls outside that guarantee: a later 'IF' can match a value "
+           + "the row has already moved past, and the concurrency check silently stops working. Add "
+           + "'UseInsertIfNotExists()' so every write to the partition goes through Paxos.";
+
     public static string TimestampWithLightweightTransaction()
         => "A write timestamp cannot be set on a conditional write. Lightweight transactions order themselves "
            + "through Paxos and assign their own timestamps, so ScyllaDB rejects a custom one. Drop the "

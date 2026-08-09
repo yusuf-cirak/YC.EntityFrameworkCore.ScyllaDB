@@ -207,9 +207,34 @@ round-trip that reproduces the keys and the view mapping.
   its key columns do.
 - Views must be created after their base tables, so `EnsureCreatedAsync` orders the two passes.
 
+## Observability ✅
+
+Spec: `docs/superpowers/specs/2026-08-09-observability-design.md` ·
+Plan: `docs/superpowers/plans/2026-08-09-observability.md` · Commits `741ee2d..1d71674`
+
+- [x] `ScyllaInstrumentation` — `ActivitySource` and `Meter`, both named `YC.EntityFrameworkCore.ScyllaDB`,
+      no new package reference
+- [x] A client span per CQL statement, following the OpenTelemetry Cassandra semantic conventions
+- [x] `db.client.operation.duration` histogram
+- [x] `WithQueryTextInTelemetry(bool)` — on by default
+
+**Verified:** build clean, 105 unit tests, 50 functional tests.
+
+**Findings worth keeping:**
+- `using var activity = ...` compiles to a method's *outermost* `finally`, outside the `try`/`catch`/`finally`
+  written below it. Disposing an `Activity` runs every listener's `ActivityStopped` callback, so an exporter
+  that threw could fault a successful query or replace a real `DriverException`. Found by the whole-branch
+  review, after a per-task review had already "fixed" the isolation — the `using` looked innocent in its own
+  diff. Two functional tests now pin it; the revert experiment confirmed both fail without the fix.
+- A `Logged` batch spans arbitrary tables, so labelling its span from `operations[0]` was simply wrong. It now
+  reports keyspace and table only when every operation agrees — an absent attribute is honest, a wrong one is
+  worse than none.
+- The README should not cite a test count. It was already wrong in the commit that wrote it.
+
 ## Phase 8 — Release
 
 - [ ] Sample project exercising the provider end to end
 - [ ] `FEATURES.md` — the supported and unsupported matrix
-- [ ] `PER PARTITION LIMIT`, deferred from Phase 6
-- [ ] 0.1.0
+- [ ] `PER PARTITION LIMIT`, deferred from Phase 6 — needs a marker method and preprocessor plumbing; assess
+      whether it earns that before building it
+- [ ] 0.1.0, then add the GitHub remote and push (the release workflow fires on a push to `master`)

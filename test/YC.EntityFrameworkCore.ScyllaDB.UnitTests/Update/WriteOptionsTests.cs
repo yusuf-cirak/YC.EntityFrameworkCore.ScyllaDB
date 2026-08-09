@@ -31,6 +31,11 @@ public class WriteOptionsTests
                 if (concurrencyToken)
                 {
                     e.Property(d => d.Version).IsConcurrencyToken();
+
+                    // Required alongside a concurrency token: Paxos orders lightweight transactions only
+                    // against each other, so a partition also written by ordinary inserts falls outside the
+                    // guarantee. The model validator enforces the pairing.
+                    e.UseInsertIfNotExists();
                 }
 
                 if (insertIfNotExists)

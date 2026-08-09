@@ -33,6 +33,7 @@ public class ScyllaModelValidator : ModelValidator
             ValidatePartitionKey(entityType);
             ValidateStaticColumns(entityType);
             ValidateCounters(entityType);
+            ValidateConcurrencyTokens(entityType);
             ValidateTypeMappings(entityType);
         }
 
@@ -124,6 +125,32 @@ public class ScyllaModelValidator : ModelValidator
         {
             throw new InvalidOperationException(
                 ScyllaStrings.CounterTableWithDefaultTimeToLive(entityType.DisplayName()));
+        }
+    }
+
+    /// <summary>
+    ///     Requires a conditional insert wherever a concurrency token is declared.
+    /// </summary>
+    /// <remarks>
+    ///     ScyllaDB orders lightweight transactions only against one another. A partition that is also written
+    ///     by ordinary statements sits outside that guarantee, and a later <c>IF</c> can match a value the row
+    ///     has already moved past — so the concurrency check passes when it should have failed. The failure is
+    ///     silent and intermittent, which is exactly the kind this provider refuses at model time rather than
+    ///     leaving to be discovered in production.
+    /// </remarks>
+    protected virtual void ValidateConcurrencyTokens(IEntityType entityType)
+    {
+        if (entityType.UsesInsertIfNotExists())
+        {
+            return;
+        }
+
+        var token = entityType.GetProperties().FirstOrDefault(p => p.IsConcurrencyToken);
+
+        if (token is not null)
+        {
+            throw new InvalidOperationException(
+                ScyllaStrings.ConcurrencyTokenNeedsConditionalInsert(entityType.DisplayName(), token.Name));
         }
     }
 
