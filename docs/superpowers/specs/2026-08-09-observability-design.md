@@ -86,12 +86,15 @@ Span names must stay low-cardinality, so they never include anything beyond thes
 | `db.collection.name` | Table, for single-table operations |
 | `db.operation.name` | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `BATCH`, `CREATE TABLE`, … |
 | `db.query.text` | The CQL, when enabled |
-| `cassandra.consistency.level` | Only when explicitly configured, since otherwise the driver's default applies and the provider does not know it |
+| `cassandra.consistency.level` | Read from `ExecutionInfo.AchievedConsistency`, so it reports the level actually used rather than only the one configured |
 | `cassandra.page.size` | Only when set |
 | `cassandra.query.idempotent` | The statement's idempotence flag |
 | `db.operation.batch.size` | Statement count, for batches |
 | `error.type` | Exception type name, on failure |
-| `db.response.status_code` | Driver error code where the exception exposes one |
+
+`db.response.status_code` is not emitted. The driver surfaces no protocol error code on a common base type —
+each exception carries its own shape — so there is nothing consistent to report, and `error.type` already
+identifies the failure.
 
 `db.system.name` is `cassandra` because the semantic conventions define no separate ScyllaDB value, and ScyllaDB
 is CQL-compatible — a consumer's Cassandra dashboards should apply unchanged.
