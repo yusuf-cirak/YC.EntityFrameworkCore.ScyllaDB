@@ -107,15 +107,41 @@ and a counter accumulating across two saves.
 - `EntityEntry` exposes its `IUpdateEntry` through `IInfrastructure<InternalEntityEntry>`, which makes DML
   generation testable as a pure function with no driver involved.
 
-## Phase 4 — Query pipeline
+## Phase 4 — Query pipeline ✅
 
-- [ ] `CqlSelectExpression` with typed restriction buckets, not a boolean predicate tree
-- [ ] `ScyllaQueryableMethodTranslatingExpressionVisitor` — Where/Select/OrderBy/Take/First/Count/Any
-- [ ] `CqlQueryValidator` — partition key, contiguous clustering prefix, ordering rules
-- [ ] `ScyllaShapedQueryCompilingExpressionVisitor` + materialization
-- [ ] Every unsupported construct throws at translation time with its documented message
+- [x] `CqlSelectExpression` with typed restriction buckets, not a boolean predicate tree
+- [x] `ScyllaQueryableMethodTranslatingExpressionVisitor` — Where, OrderBy/ThenBy, Take, First, Single, Any,
+      Count/LongCount, Contains → `IN`; every other operator throws with a named reason
+- [x] `CqlQueryValidator` — partition key coverage, contiguous clustering prefix, single trailing range,
+      ordering restricted to clustering order or its exact reverse
+- [x] `ScyllaShapedQueryCompilingExpressionVisitor` + `ScyllaQueryingEnumerable`, async-only
+- [x] `EF.Functions.AllowFiltering()` plus the evaluatable-expression filter that keeps it out of client-side
+      evaluation
+- [x] `ToCqlString()` — shows the statement a query would run, without running it
 
-## Phases 5–8
+**Verified:** build clean across 5 projects, 0 warnings. 83 unit tests, 25 functional tests against a real
+container — partition-scoped reads, clustering ranges, `IN`, `Take`, `Count`/`Any`, ordering, captured
+variables as parameters, `ALLOW FILTERING`, and the refusal of synchronous enumeration.
 
-See the plan file. Order: Scylla-specific writes (TTL, `USING TIMESTAMP`, LWT concurrency) → query ergonomics
-(ALLOW FILTERING, paging, indexes, materialized views) → scaffolding → docs and 0.1.0.
+**Findings:**
+- `EF.Functions.AllowFiltering()` mentions no entity, so EF Core evaluated it client-side and hit the
+  "only for use inside a query" guard instead of translating it. An `IEvaluatableExpressionFilterPlugin` is what
+  routes it to the translator.
+- Projected columns follow EF Core's property order (keys first, then alphabetical), not declaration order,
+  because the value buffer handed to the materialiser is addressed by property index.
+- `InjectStructuralTypeMaterializers` plus a `ValueBuffer` filled by `property.GetIndex()` is the whole
+  materialisation path — no custom materialiser needed.
+
+**Not translated yet, each with its own message:** projections (`Select` of anything but the entity), `Skip`,
+`GroupBy`, joins, set operations, `Sum`/`Min`/`Max`/`Average`/`All`, `Distinct`, `Reverse`, `Last`, `OR`, `!=`.
+
+## Phase 5 — Scylla-specific writes
+
+- [ ] `USING TTL` and `USING TIMESTAMP` on writes
+- [ ] Lightweight transactions as the concurrency-token mechanism, checking `[applied]`
+- [ ] `WRITETIME()` / `TTL()` read functions
+
+## Phases 6–8
+
+See the plan file. Order: query ergonomics (cursor paging, indexes, materialized views, `PER PARTITION LIMIT`,
+projections) → scaffolding → docs and 0.1.0.

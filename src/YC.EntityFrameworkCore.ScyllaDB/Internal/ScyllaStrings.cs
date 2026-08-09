@@ -40,6 +40,101 @@ internal static class ScyllaStrings
     public static string NotImplementedUntilPhase(string feature, string phase)
         => $"{feature} is not implemented yet (planned for {phase}).";
 
+    public static string ProjectionsNotSupported()
+        => "Projections are not translated yet, so 'Select' must return the entity itself. Read the rows first "
+           + "and project afterwards: 'await query.ToListAsync()' then 'Select(...)'.";
+
+    public static string NotTranslatable(string method)
+        => $"'{method}' cannot be translated to CQL.";
+
+    public static string JoinsNotSupported(string method)
+        => $"CQL has no JOIN, so '{method}' cannot be translated. ScyllaDB expects related data to be "
+           + "denormalised into a single table, or exposed through a materialized view — query that instead.";
+
+    public static string SkipNotSupported()
+        => "CQL has no OFFSET, so 'Skip' cannot be translated. Paging in ScyllaDB is cursor-based: read a page, "
+           + "keep the paging state the server returns, and pass it back for the next page.";
+
+    public static string GroupByNotSupported()
+        => "'GroupBy' cannot be translated. CQL's GROUP BY only groups by a prefix of the primary key and "
+           + "aggregates on the coordinator. Restrict the query to a single partition and group in memory after "
+           + "'ToListAsync', or maintain a counter table.";
+
+    public static string SetOperationsNotSupported(string method)
+        => $"CQL has no set operators, so '{method}' cannot be translated. Run the queries separately and "
+           + "combine the results in memory.";
+
+    public static string SubqueriesNotSupported()
+        => "CQL has no subqueries. Split the query into separate round trips.";
+
+    public static string OrElseNotSupported()
+        => "CQL's WHERE does not support OR. Run one query per branch and combine the results in memory, or "
+           + "restructure the table so the alternatives share a partition.";
+
+    public static string NotEqualNotSupported(string column)
+        => $"CQL's WHERE does not support '!='. Column '{column}' was compared with inequality; only =, <, <=, "
+           + ">, >= and IN are valid restrictions.";
+
+    public static string AggregateNotSupported(string method)
+        => $"'{method}' cannot be translated. CQL computes aggregates on the coordinator over every row it "
+           + "scans, which is unbounded outside a single partition. Read the rows and aggregate in memory, or "
+           + "maintain a counter table.";
+
+    public static string PartitionKeyNotRestricted(string entityType, IReadOnlyList<string> missing)
+        => $"This query would scan every partition of '{entityType}': "
+           + $"{string.Join(", ", missing.Select(m => $"'{m}'"))} "
+           + (missing.Count == 1 ? "is" : "are")
+           + " part of the partition key but unrestricted. Restrict the whole partition key with '==', or opt "
+           + "into a full scan with 'EF.Functions.AllowFiltering()'.";
+
+    public static string RangeOnPartitionKey(string entityType, string column)
+        => $"Partition key column '{entityType}.{column}' can only be restricted with '==' or 'Contains'. A "
+           + "partition key has no ordering — it is hashed — so a range comparison cannot be answered.";
+
+    public static string InOnNonLastKeyColumn(string column, int position, int total)
+        => $"'Contains' translates to CQL's IN, which is only valid on the last partition key column. "
+           + $"'{column}' is column {position} of {total}.";
+
+    public static string ClusteringPrefixBroken(
+        string entityType,
+        string skipped,
+        string restricted,
+        IReadOnlyList<string> clusteringOrder)
+        => $"Clustering columns must be restricted as a contiguous prefix. This query restricts "
+           + $"'{restricted}' but skips '{skipped}' on '{entityType}' (clustering order: "
+           + $"{string.Join(", ", clusteringOrder)}). Rows are stored in that order, so the engine cannot seek "
+           + $"past a gap. Restrict '{skipped}' too, or opt into a scan with 'EF.Functions.AllowFiltering()'.";
+
+    public static string MultipleClusteringRanges(string first, string second)
+        => $"Only the last restricted clustering column may use a range comparison, but both '{first}' and "
+           + $"'{second}' do.";
+
+    public static string RangeNotOnLastClusteringColumn(string column, string lastRestricted)
+        => $"A range comparison is only valid on the last restricted clustering column. '{column}' uses one, "
+           + $"but '{lastRestricted}' is restricted after it.";
+
+    public static string NonKeyRestrictionNeedsFiltering(string entityType, string column)
+        => $"Column '{entityType}.{column}' is not part of the primary key, so filtering on it means scanning "
+           + "every row. Restrict the partition key instead, or opt in explicitly with "
+           + "'EF.Functions.AllowFiltering()'.";
+
+    public static string OrderByNonClusteringColumn(
+        string entityType,
+        string column,
+        IReadOnlyList<string> clusteringColumns)
+        => $"CQL can only order by clustering columns, and '{entityType}.{column}' is not one "
+           + (clusteringColumns.Count == 0
+               ? "— the table has none."
+               : $"(clustering columns: {string.Join(", ", clusteringColumns)}). ")
+           + "Order in memory after 'ToListAsync', or add a table or materialized view clustered by that column.";
+
+    public static string OrderByNotClusteringOrder(
+        IReadOnlyList<string> requested,
+        IReadOnlyList<string> clusteringOrder)
+        => $"CQL can only return rows in the declared clustering order ({string.Join(", ", clusteringOrder)}) "
+           + $"or its exact reverse. The requested order was {string.Join(", ", requested)}. Rows are stored in "
+           + "clustering order, so the engine can walk them forwards or backwards and nothing else.";
+
     public static string CounterUnchanged(string entityType)
         => $"An entry of counter table '{entityType}' was marked as changed, but no counter moved. CQL can only "
            + "increment a counter, so there is nothing to send. Change a counter value, or leave the entry "

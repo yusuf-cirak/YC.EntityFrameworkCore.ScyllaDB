@@ -15,15 +15,33 @@ namespace YC.EntityFrameworkCore.ScyllaDB.Query.Internal;
 public class ScyllaQueryableMethodTranslatingExpressionVisitorFactory
     : IQueryableMethodTranslatingExpressionVisitorFactory
 {
+    private readonly QueryableMethodTranslatingExpressionVisitorDependencies _dependencies;
+
+    public ScyllaQueryableMethodTranslatingExpressionVisitorFactory(
+        QueryableMethodTranslatingExpressionVisitorDependencies dependencies)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+
+        _dependencies = dependencies;
+    }
+
     public virtual QueryableMethodTranslatingExpressionVisitor Create(QueryCompilationContext queryCompilationContext)
-        => throw new NotImplementedException(
-            ScyllaStrings.NotImplementedUntilPhase("Query translation", "the query pipeline milestone"));
+        => new ScyllaQueryableMethodTranslatingExpressionVisitor(_dependencies, queryCompilationContext);
 }
 
 /// <inheritdoc cref="ScyllaQueryableMethodTranslatingExpressionVisitorFactory" />
 public class ScyllaShapedQueryCompilingExpressionVisitorFactory : IShapedQueryCompilingExpressionVisitorFactory
 {
+    private readonly ShapedQueryCompilingExpressionVisitorDependencies _dependencies;
+
+    public ScyllaShapedQueryCompilingExpressionVisitorFactory(
+        ShapedQueryCompilingExpressionVisitorDependencies dependencies)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+
+        _dependencies = dependencies;
+    }
+
     public virtual ShapedQueryCompilingExpressionVisitor Create(QueryCompilationContext queryCompilationContext)
-        => throw new NotImplementedException(
-            ScyllaStrings.NotImplementedUntilPhase("Query materialization", "the query pipeline milestone"));
+        => new ScyllaShapedQueryCompilingExpressionVisitor(_dependencies, queryCompilationContext);
 }

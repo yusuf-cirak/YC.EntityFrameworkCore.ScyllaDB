@@ -39,6 +39,7 @@ public static class ScyllaServiceCollectionExtensions
             .TryAdd<IModelValidator, ScyllaModelValidator>()
             .TryAdd<IProviderConventionSetBuilder, ScyllaConventionSetBuilder>()
             .TryAdd<IQueryContextFactory, ScyllaQueryContextFactory>()
+            .TryAdd<IEvaluatableExpressionFilterPlugin, ScyllaEvaluatableExpressionFilterPlugin>()
             .TryAdd<IQueryableMethodTranslatingExpressionVisitorFactory,
                 ScyllaQueryableMethodTranslatingExpressionVisitorFactory>()
             .TryAdd<IShapedQueryCompilingExpressionVisitorFactory, ScyllaShapedQueryCompilingExpressionVisitorFactory>()
