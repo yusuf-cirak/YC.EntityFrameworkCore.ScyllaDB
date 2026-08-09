@@ -69,13 +69,25 @@ public static class ScyllaInstrumentation
     /// <summary>
     ///     Starts a client span for a statement, or returns null when nothing is listening.
     /// </summary>
+    /// <param name="context">What the caller knows about the statement.</param>
+    /// <param name="statement">The prepared statement, for the attributes only it can supply.</param>
+    /// <param name="emitQueryText">
+    ///     Whether <see cref="ScyllaOperationContext.QueryText" /> is written to the span as
+    ///     <c>db.query.text</c>. False for <c>WithQueryTextInTelemetry(false)</c>. The operation name is still
+    ///     derived from the query text either way — that option is about not emitting the CQL, not about
+    ///     losing the low-cardinality verb the span is named for.
+    /// </param>
     /// <remarks>
-    ///     Checked before anything else is computed: deriving the operation name and building the span name
-    ///     are not free, and the whole point of <see cref="ActivitySource" /> is that a caller pays nothing
-    ///     when no listener is attached. Skipping straight to <c>StartActivity</c> would still return null in
-    ///     that case, but only after doing the work this guard avoids.
+    ///     <see cref="ActivitySource.HasListeners" /> is checked before anything else is computed: deriving the
+    ///     operation name and building the span name are not free, and the whole point of
+    ///     <see cref="ActivitySource" /> is that a caller pays nothing when no listener is attached. Skipping
+    ///     straight to <c>StartActivity</c> would still return null in that case, but only after doing the
+    ///     work this guard avoids.
     /// </remarks>
-    public static Activity? StartActivity(in ScyllaOperationContext context, IStatement? statement)
+    public static Activity? StartActivity(
+        in ScyllaOperationContext context,
+        IStatement? statement,
+        bool emitQueryText = true)
     {
         if (!Source.HasListeners())
         {
@@ -90,40 +102,54 @@ public static class ScyllaInstrumentation
             return null;
         }
 
-        activity.SetTag("db.system.name", "cassandra");
+        // `context` is an `in` parameter and cannot be captured by the lambda below, so the fields the
+        // lambda needs are copied out here first.
+        var keyspace = context.Keyspace;
+        var table = context.Table;
+        var queryText = emitQueryText ? context.QueryText : null;
 
-        if (operation is not null)
+        Observe(() =>
         {
-            activity.SetTag("db.operation.name", operation);
-        }
+            activity.SetTag("db.system.name", "cassandra");
 
-        if (context.Keyspace is { Length: > 0 })
-        {
-            activity.SetTag("db.namespace", context.Keyspace);
-        }
-
-        if (context.Table is { Length: > 0 })
-        {
-            activity.SetTag("db.collection.name", context.Table);
-        }
-
-        if (statement is not null)
-        {
-            if (statement.PageSize > 0)
+            if (operation is not null)
             {
-                activity.SetTag("cassandra.page.size", statement.PageSize);
+                activity.SetTag("db.operation.name", operation);
             }
 
-            if (statement.IsIdempotent is { } idempotent)
+            if (keyspace is { Length: > 0 })
             {
-                activity.SetTag("cassandra.query.idempotent", idempotent);
+                activity.SetTag("db.namespace", keyspace);
             }
 
-            if (statement is BatchStatement batch)
+            if (table is { Length: > 0 })
             {
-                activity.SetTag("db.operation.batch.size", batch.Statements.Count());
+                activity.SetTag("db.collection.name", table);
             }
-        }
+
+            if (queryText is not null)
+            {
+                activity.SetTag("db.query.text", queryText);
+            }
+
+            if (statement is not null)
+            {
+                if (statement.PageSize > 0)
+                {
+                    activity.SetTag("cassandra.page.size", statement.PageSize);
+                }
+
+                if (statement.IsIdempotent is { } idempotent)
+                {
+                    activity.SetTag("cassandra.query.idempotent", idempotent);
+                }
+
+                if (statement is BatchStatement batch)
+                {
+                    activity.SetTag("db.operation.batch.size", batch.Statements.Count());
+                }
+            }
+        });
 
         return activity;
     }
@@ -150,11 +176,17 @@ public static class ScyllaInstrumentation
             return;
         }
 
-        activity.SetTag(
-            "cassandra.consistency.level",
-            rowSet.Info.AchievedConsistency.ToString().ToLowerInvariant());
+        // Narrowed to a local: the null check above does not carry into the lambda's captured parameter.
+        var span = activity;
 
-        activity.SetTag("db.response.returned_rows", rowSet.GetAvailableWithoutFetching());
+        Observe(() =>
+        {
+            span.SetTag(
+                "cassandra.consistency.level",
+                rowSet.Info.AchievedConsistency.ToString().ToLowerInvariant());
+
+            span.SetTag("db.response.returned_rows", rowSet.GetAvailableWithoutFetching());
+        });
     }
 
     /// <summary>
@@ -177,8 +209,11 @@ public static class ScyllaInstrumentation
     {
         var exceptionType = exception.GetType().FullName;
 
-        activity?.SetTag("error.type", exceptionType);
-        activity?.SetStatus(ActivityStatusCode.Error, exceptionType);
+        Observe(() =>
+        {
+            activity?.SetTag("error.type", exceptionType);
+            activity?.SetStatus(ActivityStatusCode.Error, exceptionType);
+        });
     }
 
     /// <summary>
@@ -186,34 +221,71 @@ public static class ScyllaInstrumentation
     /// </summary>
     public static void RecordDuration(TimeSpan elapsed, in ScyllaOperationContext context, string? errorType)
     {
-        if (!OperationDuration.Enabled)
+        // `context` is an `in` parameter and cannot be captured by the lambda below, so the fields the
+        // lambda needs are copied out here first.
+        var operation = context.OperationName ?? DeriveOperationName(context.QueryText);
+        var keyspace = context.Keyspace;
+        var table = context.Table;
+
+        Observe(() =>
         {
-            return;
-        }
+            if (!OperationDuration.Enabled)
+            {
+                return;
+            }
 
-        var tags = new TagList { { "db.system.name", "cassandra" } };
+            var tags = new TagList { { "db.system.name", "cassandra" } };
 
-        if ((context.OperationName ?? DeriveOperationName(context.QueryText)) is { } operation)
+            if (operation is not null)
+            {
+                tags.Add("db.operation.name", operation);
+            }
+
+            if (keyspace is { Length: > 0 })
+            {
+                tags.Add("db.namespace", keyspace);
+            }
+
+            if (table is { Length: > 0 })
+            {
+                tags.Add("db.collection.name", table);
+            }
+
+            if (errorType is not null)
+            {
+                tags.Add("error.type", errorType);
+            }
+
+            OperationDuration.Record(elapsed.TotalSeconds, tags);
+        });
+    }
+
+    /// <summary>
+    ///     Runs a piece of telemetry-recording code so that nothing it does can affect the query it describes.
+    /// </summary>
+    /// <remarks>
+    ///     Every caller above sits on the query's own success/failure path — <see cref="RecordResult" /> runs
+    ///     where a successful result is about to be returned, <see cref="RecordDuration" /> runs in a
+    ///     <c>finally</c> around both outcomes. An exception escaping here would either replace a genuine
+    ///     driver exception or turn a successful query into a reported failure. <see cref="Activity.SetTag" />
+    ///     and <c>Histogram&lt;T&gt;.Record</c> are documented not to throw in normal use, but that guarantee
+    ///     should hold because this method makes it structural, not because the BCL happens to behave today.
+    ///     The catch is deliberately silent: a broken exporter or listener must never
+    ///     fail a query. Cancellation and the exceptions that mean the process itself is unwell are left to
+    ///     propagate untouched, since swallowing those would trade a real problem for a quiet one.
+    /// </remarks>
+    /// <param name="action">The telemetry-recording step to run.</param>
+    private static void Observe(Action action)
+    {
+        try
         {
-            tags.Add("db.operation.name", operation);
+            action();
         }
-
-        if (context.Keyspace is { Length: > 0 })
+        catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException
+            or StackOverflowException or AccessViolationException))
         {
-            tags.Add("db.namespace", context.Keyspace);
+            // Swallowed deliberately — see remarks above.
         }
-
-        if (context.Table is { Length: > 0 })
-        {
-            tags.Add("db.collection.name", context.Table);
-        }
-
-        if (errorType is not null)
-        {
-            tags.Add("error.type", errorType);
-        }
-
-        OperationDuration.Record(elapsed.TotalSeconds, tags);
     }
 
     /// <summary>

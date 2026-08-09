@@ -170,6 +170,32 @@ public class TelemetryTests(ScyllaContainerFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
+    ///     A write never sets <c>OperationName</c> explicitly — unlike a query, it always relies on the verb
+    ///     being derived from the CQL — so it is the path where turning query text off could silently cost the
+    ///     operation name and, with it, the span name. <c>WithQueryTextInTelemetry(false)</c> is only meant to
+    ///     stop the CQL itself from being emitted, not to reduce span fidelity.
+    /// </summary>
+    [Fact]
+    public async Task Write_span_keeps_its_operation_name_when_query_text_is_disabled()
+    {
+        var (captured, listener) = Listen();
+        using (listener)
+        {
+            await using var context = CreateContext(queryText: false);
+
+            context.Add(
+                new Reading { SensorId = Guid.NewGuid(), RecordedAt = DateTimeOffset.UnixEpoch, Value = 1 });
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var span = Assert.Single(captured, a => (string?)a.GetTagItem("db.operation.name") == "INSERT");
+
+        Assert.Equal($"INSERT {Keyspace}.readings", span.DisplayName);
+        Assert.Equal("readings", span.GetTagItem("db.collection.name"));
+        Assert.Null(span.GetTagItem("db.query.text"));
+    }
+
+    /// <summary>
     ///     Rows sharing a partition go out as one batch, and the batch size is what tells a reader whether
     ///     the write was one round trip or many.
     /// </summary>

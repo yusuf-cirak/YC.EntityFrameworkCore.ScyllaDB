@@ -83,17 +83,11 @@ public class ScyllaClientWrapper : IScyllaClientWrapper, IResettableService
 
         var prepared = ApplyDefaults(statement);
 
-        if (!_options.EmitQueryTextInTelemetry)
-        {
-            context = context with { QueryText = null };
-        }
-
-        using var activity = ScyllaInstrumentation.StartActivity(context, prepared);
-
-        if (activity is not null && context.QueryText is { } queryText)
-        {
-            activity.SetTag("db.query.text", queryText);
-        }
+        // The context keeps its query text regardless of the option below: RecordDuration and the operation
+        // name both derive the CQL verb from it, and neither ever emits the text itself. Only StartActivity
+        // is told whether to also write it onto the span as db.query.text.
+        using var activity = ScyllaInstrumentation.StartActivity(
+            context, prepared, _options.EmitQueryTextInTelemetry);
 
         var startedAt = Stopwatch.GetTimestamp();
         string? errorType = null;
