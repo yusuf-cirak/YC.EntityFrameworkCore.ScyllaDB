@@ -23,4 +23,5 @@ public static class ScyllaAnnotationNames
     public const string CqlType = Prefix + "CqlType";
     public const string CollectionKind = Prefix + "CollectionKind";
     public const string InsertIfNotExists = Prefix + "Lwt:InsertIfNotExists";
+    public const string Indexes = Prefix + "Indexes";
 }

@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
 using YC.EntityFrameworkCore.ScyllaDB.UnitTests.TestUtilities;
 
 namespace YC.EntityFrameworkCore.ScyllaDB.UnitTests.Metadata;
@@ -126,6 +128,47 @@ public class DdlGenerationTests
 
         Assert.DoesNotContain(" SensorId ", cql, StringComparison.Ordinal);
         Assert.Contains("\"SensorId\"", cql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Secondary_index_is_emitted_with_its_name()
+    {
+        using var context = ScyllaModelFixture.CreateContext(
+            b => b.Entity<Reading>(e =>
+            {
+                e.ToScyllaTable("readings");
+                e.HasPartitionKey(r => r.SensorId);
+                e.HasScyllaIndex(r => r.Status, "readings_by_status");
+            }));
+
+        var entityType = context.Model.FindEntityType(typeof(Reading))!;
+        var statements = context.GetService<IScyllaDdlGenerator>().CreateIndexes(entityType);
+
+        Assert.Equal(
+            "CREATE INDEX IF NOT EXISTS \"readings_by_status\" ON \"test_keyspace\".\"readings\" (\"Status\")",
+            Assert.Single(statements));
+    }
+
+    /// <summary>
+    ///     Leaving the name off lets ScyllaDB derive one, which keeps the statement idempotent without the
+    ///     model having to invent a name.
+    /// </summary>
+    [Fact]
+    public void Unnamed_secondary_index_omits_the_name()
+    {
+        using var context = ScyllaModelFixture.CreateContext(
+            b => b.Entity<Reading>(e =>
+            {
+                e.ToScyllaTable("readings");
+                e.HasPartitionKey(r => r.SensorId);
+                e.HasScyllaIndex(r => r.Status);
+            }));
+
+        var entityType = context.Model.FindEntityType(typeof(Reading))!;
+
+        Assert.Equal(
+            "CREATE INDEX IF NOT EXISTS ON \"test_keyspace\".\"readings\" (\"Status\")",
+            Assert.Single(context.GetService<IScyllaDdlGenerator>().CreateIndexes(entityType)));
     }
 
     [Fact]

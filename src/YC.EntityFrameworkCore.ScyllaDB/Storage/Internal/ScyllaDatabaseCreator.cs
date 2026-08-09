@@ -92,6 +92,11 @@ public class ScyllaDatabaseCreator : IDatabaseCreator
         foreach (var entityType in model.GetEntityTypes())
         {
             await ExecuteDdlAsync(_ddlGenerator.CreateTable(entityType), cancellationToken).ConfigureAwait(false);
+
+            foreach (var createIndex in _ddlGenerator.CreateIndexes(entityType))
+            {
+                await ExecuteDdlAsync(createIndex, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return created;

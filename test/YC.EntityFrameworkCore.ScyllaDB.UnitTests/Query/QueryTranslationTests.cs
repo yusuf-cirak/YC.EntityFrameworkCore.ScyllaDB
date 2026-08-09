@@ -239,13 +239,31 @@ public class QueryTranslationTests
         Assert.Contains("coordinator", exception!.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     Narrowing matters more here than in SQL: CQL rows can be wide, and every column named is a cell
+    ///     fetched from storage.
+    /// </summary>
     [Fact]
-    public void Projection_points_at_materialising_first()
+    public void Projection_narrows_the_selected_columns()
     {
         using var context = CreateContext();
 
-        var exception = Record.Exception(() => context.Readings.Select(r => r.Value).ToCqlString());
+        var cql = context.Readings
+            .Where(r => r.SensorId == SensorId)
+            .Select(r => new { r.RecordedAt, r.Value })
+            .ToCqlString();
 
-        Assert.Contains("Projections are not translated yet", exception!.Message, StringComparison.Ordinal);
+        Assert.Contains("SELECT \"RecordedAt\", \"Value\" FROM", cql, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Status\"", cql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Scalar_projection_selects_one_column()
+    {
+        using var context = CreateContext();
+
+        var cql = context.Readings.Where(r => r.SensorId == SensorId).Select(r => r.Value).ToCqlString();
+
+        Assert.Contains("SELECT \"Value\" FROM", cql, StringComparison.Ordinal);
     }
 }

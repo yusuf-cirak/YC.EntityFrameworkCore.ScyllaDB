@@ -10,11 +10,19 @@ using YC.EntityFrameworkCore.ScyllaDB.Storage.Internal;
 namespace YC.EntityFrameworkCore.ScyllaDB.Query.Internal;
 
 /// <summary>
-///     Exposes the CQL a query would run, without running it.
+///     Exposes the CQL a query would run, and lets it be read one page at a time.
 /// </summary>
 public interface IScyllaQueryingEnumerable
 {
     string ToCqlString();
+
+    /// <summary>
+    ///     Reads a single page, returning the cursor for the next one.
+    /// </summary>
+    Task<ScyllaPage<TResult>> ToPageAsync<TResult>(
+        int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -64,6 +72,51 @@ public sealed class ScyllaQueryingEnumerable<T> : IAsyncEnumerable<T>, IEnumerab
             : $"{cql}{Environment.NewLine}-- values: {string.Join(", ", values.Select(v => v ?? "null"))}";
     }
 
+    /// <summary>
+    ///     Reads one page of rows and returns the cursor for the next.
+    /// </summary>
+    /// <remarks>
+    ///     This is what replaces <c>Skip</c>: CQL has no OFFSET, and cannot get one, because rows are found by
+    ///     seeking rather than counted through. Auto-paging is turned off so the driver returns exactly one
+    ///     page instead of transparently fetching the rest as the results are enumerated.
+    /// </remarks>
+    public async Task<ScyllaPage<TResult>> ToPageAsync<TResult>(
+        int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        var clientWrapper = _queryContext.Context.GetService<IScyllaClientWrapper>();
+        var (cql, values) = CqlQueryGenerator.Generate(_select, _queryContext.Parameters);
+
+        var statement = await clientWrapper.BindAsync(cql, values, cancellationToken).ConfigureAwait(false);
+
+        statement.SetPageSize(pageSize);
+        statement.SetAutoPage(false);
+
+        if (continuationToken is not null)
+        {
+            statement.SetPagingState(Convert.FromBase64String(continuationToken));
+        }
+
+        var rowSet = await clientWrapper.ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+
+        _queryContext.InitializeStateManager(_standAloneStateManager);
+
+        var values2 = new List<TResult>(pageSize);
+
+        foreach (var row in rowSet)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            values2.Add((TResult)(object)_shaper(_queryContext, BufferFor(row))!);
+        }
+
+        return new ScyllaPage<TResult>(
+            values2,
+            rowSet.PagingState is { Length: > 0 } state ? Convert.ToBase64String(state) : null);
+    }
+
     public IEnumerator<T> GetEnumerator()
         => throw new InvalidOperationException(
             ScyllaStrings.SyncNotSupported("a synchronous query", "ToListAsync, FirstOrDefaultAsync or similar"));
@@ -83,22 +136,38 @@ public sealed class ScyllaQueryingEnumerable<T> : IAsyncEnumerable<T>, IEnumerab
 
         _queryContext.InitializeStateManager(_standAloneStateManager);
 
-        var isAggregate = _select.Aggregate is not null;
-        var properties = _select.ProjectedProperties;
-
         foreach (var row in rowSet)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            yield return _shaper(_queryContext, isAggregate ? AggregateBuffer(row) : EntityBuffer(row, properties));
+            yield return _shaper(_queryContext, BufferFor(row));
         }
 
         _ = _contextType;
         _ = _resultCardinality;
     }
 
-    private static ValueBuffer AggregateBuffer(Row row)
-        => new([row.GetValue<long>(0)]);
+    private ValueBuffer BufferFor(Row row)
+        => _select.Aggregate is not null
+            ? new ValueBuffer([row.GetValue<long>(0)])
+            : _select.Projection is { } projection
+                ? ProjectionBuffer(row, projection)
+                : EntityBuffer(row, _select.ProjectedProperties);
+
+    /// <summary>
+    ///     Reads a projection's columns positionally, matching the slots the projection binder handed out.
+    /// </summary>
+    private static ValueBuffer ProjectionBuffer(Row row, IReadOnlyList<IProperty> projection)
+    {
+        var values = new object?[projection.Count];
+
+        for (var i = 0; i < projection.Count; i++)
+        {
+            values[i] = ReadColumn(row, projection[i]);
+        }
+
+        return new ValueBuffer(values);
+    }
 
     /// <summary>
     ///     Reads a row into the value buffer layout EF Core's materialiser expects.
@@ -113,15 +182,17 @@ public sealed class ScyllaQueryingEnumerable<T> : IAsyncEnumerable<T>, IEnumerab
 
         foreach (var property in properties)
         {
-            var value = row.GetValue(
-                property.GetTypeMapping().Converter?.ProviderClrType ?? property.ClrType,
-                property.GetColumnName());
-
-            values[property.GetIndex()] = property.GetTypeMapping().Converter is { } converter
-                ? converter.ConvertFromProvider(value)
-                : value;
+            values[property.GetIndex()] = ReadColumn(row, property);
         }
 
         return new ValueBuffer(values);
+    }
+
+    private static object? ReadColumn(Row row, IProperty property)
+    {
+        var mapping = property.GetTypeMapping();
+        var value = row.GetValue(mapping.Converter?.ProviderClrType ?? property.ClrType, property.GetColumnName());
+
+        return mapping.Converter is { } converter ? converter.ConvertFromProvider(value) : value;
     }
 }

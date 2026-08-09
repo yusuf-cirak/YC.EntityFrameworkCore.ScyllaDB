@@ -150,6 +150,20 @@ public class ScyllaModelFinalizingConvention : IModelFinalizingConvention
         {
             property.SetAnnotation(ScyllaAnnotationNames.CqlType, cqlType.CqlType);
         }
+
+        if (propertyInfo.GetCustomAttribute<SecondaryIndexAttribute>() is { } index)
+        {
+            var entityType = property.DeclaringType as IConventionEntityType;
+            var existing = (IReadOnlyList<ScyllaIndex>?)entityType?
+                .FindAnnotation(ScyllaAnnotationNames.Indexes)?.Value ?? [];
+
+            if (entityType is not null && existing.All(i => i.PropertyName != property.Name))
+            {
+                entityType.SetAnnotation(
+                    ScyllaAnnotationNames.Indexes,
+                    (IReadOnlyList<ScyllaIndex>)[.. existing, new ScyllaIndex(property.Name, index.Name)]);
+            }
+        }
     }
 
     protected virtual void ApplyPrimaryKey(IConventionEntityType entityType)

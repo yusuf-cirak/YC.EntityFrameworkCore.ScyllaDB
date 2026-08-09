@@ -56,20 +56,34 @@ public class ScyllaQueryableMethodTranslatingExpressionVisitor : QueryableMethod
     }
 
     /// <summary>
-    ///     Only an identity projection is translated; the whole entity is read either way.
+    ///     Narrows the selected columns to those the projection actually reads.
     /// </summary>
     /// <remarks>
-    ///     Narrowing the column list is a real optimisation, but it changes what the shaper has to build, so it
-    ///     is left until projections are supported properly rather than half-done.
+    ///     Worth doing rather than reading the row and projecting in memory: CQL rows can be very wide, and
+    ///     every column named is a cell fetched from storage.
     /// </remarks>
     protected override ShapedQueryExpression TranslateSelect(ShapedQueryExpression source, LambdaExpression selector)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(selector);
 
-        return selector.Body == selector.Parameters[0]
-            ? source
-            : throw new InvalidOperationException(ScyllaStrings.ProjectionsNotSupported());
+        if (selector.Body == selector.Parameters[0])
+        {
+            return source;
+        }
+
+        var select = SelectOf(source);
+        var binder = new ScyllaProjectionBinder(select);
+        var shaper = binder.Visit(selector.Body);
+
+        if (binder.Projection.Count == 0)
+        {
+            throw new InvalidOperationException(ScyllaStrings.ProjectionNotTranslatable(selector.Body.ToString()));
+        }
+
+        return source
+            .UpdateQueryExpression(select.WithProjection(binder.Projection))
+            .UpdateShaperExpression(shaper);
     }
 
     protected override ShapedQueryExpression TranslateOrderBy(
@@ -320,6 +334,40 @@ public class ScyllaQueryableMethodTranslatingExpressionVisitor : QueryableMethod
         bool returnDefault)
         => throw new InvalidOperationException(
             ScyllaStrings.NotTranslatable("Last") + " Reverse the clustering order and take the first row instead.");
+}
+
+/// <summary>
+///     Rewrites a projection so each property read becomes a slot in the selected columns.
+/// </summary>
+/// <remarks>
+///     Collecting the properties as they are encountered is what lets the <c>SELECT</c> name only the columns
+///     the projection actually reads, while the shaper reads them back positionally.
+/// </remarks>
+internal sealed class ScyllaProjectionBinder(CqlSelectExpression select) : ExpressionVisitor
+{
+    private readonly List<IProperty> _projection = [];
+
+    public IReadOnlyList<IProperty> Projection
+        => _projection;
+
+    protected override Expression VisitMember(MemberExpression node)
+    {
+        if (node.Expression is not ParameterExpression
+            || select.EntityType.FindProperty(node.Member.Name) is not { } property)
+        {
+            return base.VisitMember(node);
+        }
+
+        var index = _projection.FindIndex(p => p.Name == property.Name);
+
+        if (index < 0)
+        {
+            index = _projection.Count;
+            _projection.Add(property);
+        }
+
+        return new ProjectionBindingExpression(select, index, node.Type);
+    }
 }
 
 /// <summary>

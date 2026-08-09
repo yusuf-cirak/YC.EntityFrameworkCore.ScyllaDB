@@ -9,12 +9,21 @@ namespace YC.EntityFrameworkCore.ScyllaDB.FunctionalTests;
 ///     Writes through the provider and reads back with the driver.
 /// </summary>
 /// <remarks>
-///     Reading through the provider would be circular — and the query pipeline does not exist yet — so every
-///     assertion below goes to the database directly.
+///     <para>
+///         Reading through the provider would be circular, so every assertion below goes to the database
+///         directly.
+///     </para>
+///     <para>
+///         One keyspace for the whole class, with a fresh partition key per test. EF Core caches an internal
+///         service provider per distinct connection configuration — and the keyspace is part of that — so a
+///         keyspace per test would build a service provider per test and trip EF Core's own
+///         "more than twenty service providers" guard.
+///     </para>
 /// </remarks>
 [Collection(ScyllaCollection.Name)]
 public class SaveChangesTests(ScyllaContainerFixture fixture)
 {
+    private const string Keyspace = "save_changes_tests";
     private sealed class Reading
     {
         public Guid SensorId { get; set; }
@@ -76,7 +85,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Added_entity_is_written_and_readable()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_insert_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var sensorId = Guid.NewGuid();
@@ -89,7 +98,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         var rows = await QueryAsync(
             context,
-            "SELECT \"Value\", \"Status\" FROM save_insert_tests.\"readings\" WHERE \"SensorId\" = ?",
+            $"SELECT \"Value\", \"Status\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
             cancellationToken,
             sensorId);
 
@@ -102,7 +111,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Modified_entity_leaves_untouched_columns_alone()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_update_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var sensorId = Guid.NewGuid();
@@ -111,7 +120,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
         context.Add(new Reading { SensorId = sensorId, RecordedAt = recordedAt, Value = 1, Status = "ok" });
         await context.SaveChangesAsync(cancellationToken);
 
-        await using var updateContext = CreateContext("save_update_tests");
+        await using var updateContext = CreateContext(Keyspace);
         var tracked = new Reading { SensorId = sensorId, RecordedAt = recordedAt, Value = 1, Status = "ok" };
         updateContext.Attach(tracked);
         tracked.Value = 99;
@@ -119,7 +128,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         var rows = await QueryAsync(
             updateContext,
-            "SELECT \"Value\", \"Status\" FROM save_update_tests.\"readings\" WHERE \"SensorId\" = ?",
+            $"SELECT \"Value\", \"Status\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
             cancellationToken,
             sensorId);
 
@@ -132,7 +141,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Deleted_entity_is_removed()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_delete_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var sensorId = Guid.NewGuid();
@@ -147,7 +156,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         var rows = await QueryAsync(
             context,
-            "SELECT \"SensorId\" FROM save_delete_tests.\"readings\" WHERE \"SensorId\" = ?",
+            $"SELECT \"SensorId\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
             cancellationToken,
             sensorId);
 
@@ -161,7 +170,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Rows_in_one_partition_are_written_together()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_batch_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var sensorId = Guid.NewGuid();
@@ -176,7 +185,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         var rows = await QueryAsync(
             context,
-            "SELECT \"Value\" FROM save_batch_tests.\"readings\" WHERE \"SensorId\" = ?",
+            $"SELECT \"Value\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
             cancellationToken,
             sensorId);
 
@@ -187,7 +196,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Rows_across_partitions_are_all_written()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_multi_partition_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var recordedAt = new DateTimeOffset(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
@@ -204,7 +213,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
         {
             var rows = await QueryAsync(
                 context,
-                "SELECT \"SensorId\" FROM save_multi_partition_tests.\"readings\" WHERE \"SensorId\" = ?",
+                $"SELECT \"SensorId\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
                 cancellationToken,
                 sensorId);
 
@@ -216,8 +225,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Logged_batch_mode_still_writes_everything()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext(
-            "save_logged_batch_tests", o => o.WithBatchMode(ScyllaBatchMode.Logged));
+        await using var context = CreateContext(Keyspace, o => o.WithBatchMode(ScyllaBatchMode.Logged));
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var recordedAt = new DateTimeOffset(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
@@ -230,12 +238,16 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         Assert.Equal(3, await context.SaveChangesAsync(cancellationToken));
 
-        var rows = await QueryAsync(
-            context,
-            "SELECT \"SensorId\" FROM save_logged_batch_tests.\"readings\"",
-            cancellationToken);
-
-        Assert.Equal(3, rows.Count());
+        // Scoped to this test's own partitions, since the keyspace is shared with the rest of the class.
+        foreach (var sensorId in sensorIds)
+        {
+            Assert.Single(
+                await QueryAsync(
+                    context,
+                    $"SELECT \"SensorId\" FROM {Keyspace}.\"readings\" WHERE \"SensorId\" = ?",
+                    cancellationToken,
+                    sensorId));
+        }
     }
 
     /// <summary>
@@ -246,7 +258,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
     public async Task Counter_accumulates_across_saves()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("save_counter_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var pageView = new PageView { Path = "/home", Views = 5 };
@@ -258,7 +270,7 @@ public class SaveChangesTests(ScyllaContainerFixture fixture)
 
         var rows = await QueryAsync(
             context,
-            "SELECT \"Views\" FROM save_counter_tests.\"page_views\" WHERE \"Path\" = ?",
+            $"SELECT \"Views\" FROM {Keyspace}.\"page_views\" WHERE \"Path\" = ?",
             cancellationToken,
             "/home");
 

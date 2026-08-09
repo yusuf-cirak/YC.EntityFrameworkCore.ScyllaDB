@@ -9,12 +9,19 @@ namespace YC.EntityFrameworkCore.ScyllaDB.FunctionalTests;
 ///     Exercises lightweight transactions and time-to-live against a real node.
 /// </summary>
 /// <remarks>
-///     These are the behaviours that cannot be proven by inspecting CQL text: whether Paxos actually rejects a
-///     competing write, and whether a row really disappears when its time is up.
+///     <para>
+///         These are the behaviours that cannot be proven by inspecting CQL text: whether Paxos actually
+///         rejects a competing write, and whether a row really disappears when its time is up.
+///     </para>
+///     <para>
+///         One keyspace for the whole class, with a fresh partition key per test, because EF Core caches an
+///         internal service provider per distinct connection configuration — keyspace included.
+///     </para>
 /// </remarks>
 [Collection(ScyllaCollection.Name)]
 public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
 {
+    private const string Keyspace = "concurrency_ttl_tests";
     private sealed class Document
     {
         public Guid Id { get; set; }
@@ -67,14 +74,14 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
     public async Task Conditional_insert_rejects_a_duplicate()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("lwt_insert_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var id = Guid.NewGuid();
         context.Add(new Document { Id = id, Body = "first", Version = 1 });
         await context.SaveChangesAsync(cancellationToken);
 
-        await using var second = CreateContext("lwt_insert_tests");
+        await using var second = CreateContext(Keyspace);
         second.Add(new Document { Id = id, Body = "second", Version = 1 });
 
         var exception = await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
@@ -90,14 +97,14 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
     public async Task Stale_concurrency_token_loses_the_race()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("lwt_update_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var id = Guid.NewGuid();
         context.Add(new Document { Id = id, Body = "original", Version = 1 });
         await context.SaveChangesAsync(cancellationToken);
 
-        await using var winner = CreateContext("lwt_update_tests");
+        await using var winner = CreateContext(Keyspace);
         var winning = new Document { Id = id, Body = "original", Version = 1 };
         winner.Attach(winning);
         winning.Body = "winner";
@@ -105,7 +112,7 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
         await winner.SaveChangesAsync(cancellationToken);
 
         // This writer still believes the version is 1, which is no longer true.
-        await using var loser = CreateContext("lwt_update_tests");
+        await using var loser = CreateContext(Keyspace);
         var losing = new Document { Id = id, Body = "original", Version = 1 };
         loser.Attach(losing);
         losing.Body = "loser";
@@ -124,14 +131,14 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
     public async Task Matching_concurrency_token_applies()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("lwt_success_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var id = Guid.NewGuid();
         context.Add(new Document { Id = id, Body = "original", Version = 1 });
         await context.SaveChangesAsync(cancellationToken);
 
-        await using var update = CreateContext("lwt_success_tests");
+        await using var update = CreateContext(Keyspace);
         var document = new Document { Id = id, Body = "original", Version = 1 };
         update.Attach(document);
         document.Body = "updated";
@@ -148,7 +155,7 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
     public async Task Rows_written_with_a_time_to_live_expire()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("ttl_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var id = Guid.NewGuid();
@@ -162,14 +169,14 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
         var client = context.GetService<IScyllaClientWrapper>();
 
         var before = await client.ExecuteAsync(
-            new SimpleStatement("SELECT \"Token\" FROM ttl_tests.\"sessions\" WHERE \"Id\" = ?", id),
+            new SimpleStatement($"SELECT \"Token\" FROM {Keyspace}.\"sessions\" WHERE \"Id\" = ?", id),
             cancellationToken);
         Assert.Single(before);
 
         await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
 
         var after = await client.ExecuteAsync(
-            new SimpleStatement("SELECT \"Token\" FROM ttl_tests.\"sessions\" WHERE \"Id\" = ?", id),
+            new SimpleStatement($"SELECT \"Token\" FROM {Keyspace}.\"sessions\" WHERE \"Id\" = ?", id),
             cancellationToken);
         Assert.Empty(after);
     }
@@ -178,7 +185,7 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
     public async Task Write_options_apply_only_inside_their_scope()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var context = CreateContext("ttl_scope_tests");
+        await using var context = CreateContext(Keyspace);
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         var expiring = Guid.NewGuid();
@@ -199,12 +206,12 @@ public class ConcurrencyAndTtlTests(ScyllaContainerFixture fixture)
 
         Assert.Empty(
             await client.ExecuteAsync(
-                new SimpleStatement("SELECT \"Token\" FROM ttl_scope_tests.\"sessions\" WHERE \"Id\" = ?", expiring),
+                new SimpleStatement($"SELECT \"Token\" FROM {Keyspace}.\"sessions\" WHERE \"Id\" = ?", expiring),
                 cancellationToken));
 
         Assert.Single(
             await client.ExecuteAsync(
-                new SimpleStatement("SELECT \"Token\" FROM ttl_scope_tests.\"sessions\" WHERE \"Id\" = ?", permanent),
+                new SimpleStatement($"SELECT \"Token\" FROM {Keyspace}.\"sessions\" WHERE \"Id\" = ?", permanent),
                 cancellationToken));
     }
 }

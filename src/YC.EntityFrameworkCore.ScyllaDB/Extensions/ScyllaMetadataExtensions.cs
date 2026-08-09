@@ -97,6 +97,15 @@ public static class ScyllaEntityTypeExtensions
 
     public static void SetUsesInsertIfNotExists(this IMutableEntityType entityType, bool? useLwt)
         => entityType.SetOrRemoveAnnotation(ScyllaAnnotationNames.InsertIfNotExists, useLwt);
+
+    /// <summary>
+    ///     The secondary indexes declared on this table.
+    /// </summary>
+    public static IReadOnlyList<ScyllaIndex> GetScyllaIndexes(this IReadOnlyEntityType entityType)
+        => (IReadOnlyList<ScyllaIndex>?)entityType.FindAnnotation(ScyllaAnnotationNames.Indexes)?.Value ?? [];
+
+    public static void SetScyllaIndexes(this IMutableEntityType entityType, IReadOnlyList<ScyllaIndex>? indexes)
+        => entityType.SetOrRemoveAnnotation(ScyllaAnnotationNames.Indexes, indexes);
 }
 
 /// <inheritdoc cref="ScyllaModelExtensions" />

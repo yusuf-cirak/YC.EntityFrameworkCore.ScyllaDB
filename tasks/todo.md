@@ -162,7 +162,31 @@ actually expiring when their time is up.
 **Skipped:** `WRITETIME()` / `TTL()` read functions, which need projections to be useful; per-entity write
 options, since the scope plus table-level `default_time_to_live` cover the common cases.
 
-## Phases 6–8
+## Phase 6 — Query ergonomics ✅
 
-See the plan file. Order: query ergonomics (projections, cursor paging, indexes, materialized views,
-`PER PARTITION LIMIT`) → scaffolding → docs and 0.1.0.
+- [x] Projections — `Select(x => x.Value)` and `Select(x => new { ... })` narrow the selected columns
+- [x] Cursor paging — `ToPageAsync(pageSize, continuationToken)` returning `ScyllaPage<T>`
+- [x] Secondary indexes — `HasScyllaIndex(...)` / `[SecondaryIndex]`, DDL, and validator awareness
+
+**Verified:** build clean across 5 projects, 0 warnings. 95 unit tests, 35 functional tests — projections
+narrowing the `SELECT`, paging walking a result set without overlap, and an indexed column queried without
+`ALLOW FILTERING`.
+
+**Findings:**
+- A secondary index makes a query legal *without* restricting the partition key — that is the whole point of
+  one. The validator checked the partition key first and rejected such queries; index awareness has to come
+  first.
+- EF Core caches an internal service provider per distinct connection configuration, and the keyspace is part of
+  that, so a keyspace per test built a service provider per test and tripped EF Core's own
+  "more than twenty service providers" guard. Tests now use one keyspace per class with a fresh partition key per
+  test. Documented in the README, since an application with dozens of keyspaces would hit the same wall.
+- ScyllaDB uses at most one secondary index per query, which the validator now reports rather than letting the
+  server refuse it.
+
+**Skipped:** `PER PARTITION LIMIT` (no public API reaches it, so the generator support was removed rather than
+left unreachable) and materialized views.
+
+## Phases 7–8
+
+Materialized views and `PER PARTITION LIMIT` → scaffolding from `system_schema` → sample, `FEATURES.md`,
+and 0.1.0.

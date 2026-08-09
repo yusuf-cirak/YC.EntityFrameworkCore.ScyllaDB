@@ -22,6 +22,8 @@ public interface IScyllaDdlGenerator
     string CreateTable(IEntityType entityType);
 
     string DropTable(IEntityType entityType);
+
+    IReadOnlyList<string> CreateIndexes(IEntityType entityType);
 }
 
 /// <inheritdoc cref="IScyllaDdlGenerator" />
@@ -125,6 +127,30 @@ public class ScyllaDdlGenerator : IScyllaDdlGenerator
         ArgumentNullException.ThrowIfNull(entityType);
 
         return $"DROP TABLE IF EXISTS {QualifiedName(entityType)}";
+    }
+
+    public virtual IReadOnlyList<string> CreateIndexes(IEntityType entityType)
+    {
+        ArgumentNullException.ThrowIfNull(entityType);
+
+        return
+        [
+            .. entityType.GetScyllaIndexes().Select(
+                index =>
+                {
+                    var column = entityType.FindProperty(index.PropertyName)
+                                 ?? throw new InvalidOperationException(
+                                     ScyllaStrings.IndexOnUnknownProperty(
+                                         entityType.DisplayName(), index.PropertyName));
+
+                    // An unnamed index lets ScyllaDB derive the name, which keeps the statement idempotent
+                    // without the model having to invent one.
+                    var name = index.Name is null ? string.Empty : $"{Quote(index.Name)} ";
+
+                    return $"CREATE INDEX IF NOT EXISTS {name}ON {QualifiedName(entityType)} "
+                           + $"({Quote(column.GetColumnName())})";
+                })
+        ];
     }
 
     /// <summary>

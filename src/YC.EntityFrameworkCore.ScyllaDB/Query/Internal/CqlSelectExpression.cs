@@ -93,6 +93,7 @@ public sealed class CqlSelectExpression : Expression
         Limit = source.Limit;
         AllowFiltering = source.AllowFiltering;
         Aggregate = source.Aggregate;
+        Projection = source.Projection;
     }
 
     public IEntityType EntityType { get; }
@@ -112,6 +113,15 @@ public sealed class CqlSelectExpression : Expression
     public CqlValue? Limit { get; private init; }
 
     public bool AllowFiltering { get; private init; }
+
+    /// <summary>
+    ///     The columns a projection asked for, or null when the whole entity is being read.
+    /// </summary>
+    /// <remarks>
+    ///     Narrowing matters more here than in SQL: CQL rows can be very wide, and every column read is a cell
+    ///     fetched from storage.
+    /// </remarks>
+    public IReadOnlyList<IProperty>? Projection { get; private init; }
 
     /// <summary>
     ///     Set for <c>COUNT(*)</c>. Other aggregates are coordinator-side and unbounded, so they are not
@@ -152,12 +162,15 @@ public sealed class CqlSelectExpression : Expression
     public CqlSelectExpression WithAggregate(string aggregate)
         => new(this) { Aggregate = aggregate };
 
+    public CqlSelectExpression WithProjection(IReadOnlyList<IProperty> projection)
+        => new(this) { Projection = projection };
+
     /// <summary>
-    ///     The columns materialised into an entity, ordered by EF Core's own property index so the value buffer
-    ///     lines up with what the materialiser expects.
+    ///     The columns actually selected: a projection's columns, or every property in EF Core's own index
+    ///     order so the value buffer lines up with what the materialiser expects.
     /// </summary>
     public IReadOnlyList<IProperty> ProjectedProperties
-        => [.. EntityType.GetProperties()];
+        => Projection ?? [.. EntityType.GetProperties()];
 
     protected override Expression VisitChildren(ExpressionVisitor visitor)
         => this;
@@ -180,16 +193,23 @@ public static class CqlQueryValidator
         var partitionKeys = entityType.GetPartitionKeyProperties();
         var clusteringKeys = entityType.GetClusteringKeyProperties();
 
-        ValidatePartitionKey(select, entityType, partitionKeys);
-        ValidateClusteringPrefix(select, entityType, clusteringKeys);
+        // Checked first: a secondary index is precisely what lets a query find rows without naming the
+        // partition they live in, so it changes what the partition-key rule demands.
         ValidateNonKeyRestrictions(select, entityType);
+
+        var indexed = entityType.GetScyllaIndexes().Select(i => i.PropertyName).ToHashSet(StringComparer.Ordinal);
+        var usesIndex = select.NonKeyRestrictions.Any(r => indexed.Contains(r.Property.Name));
+
+        ValidatePartitionKey(select, entityType, partitionKeys, usesIndex);
+        ValidateClusteringPrefix(select, entityType, clusteringKeys);
         ValidateOrderings(select, entityType, clusteringKeys);
     }
 
     private static void ValidatePartitionKey(
         CqlSelectExpression select,
         IEntityType entityType,
-        IReadOnlyList<IReadOnlyProperty> partitionKeys)
+        IReadOnlyList<IReadOnlyProperty> partitionKeys,
+        bool usesIndex)
     {
         var restricted = select.PartitionKeyRestrictions.Select(r => r.Property.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -213,7 +233,7 @@ public static class CqlQueryValidator
             }
         }
 
-        if (restricted.Count == partitionKeys.Count || select.AllowFiltering)
+        if (restricted.Count == partitionKeys.Count || select.AllowFiltering || usesIndex)
         {
             return;
         }
@@ -286,9 +306,25 @@ public static class CqlQueryValidator
             return;
         }
 
-        throw new InvalidOperationException(
-            ScyllaStrings.NonKeyRestrictionNeedsFiltering(
-                entityType.DisplayName(), select.NonKeyRestrictions[0].ColumnName));
+        // A secondary index makes the column seekable, which is exactly what turns a scan back into a lookup.
+        var indexed = entityType.GetScyllaIndexes().Select(i => i.PropertyName).ToHashSet(StringComparer.Ordinal);
+
+        var unindexed = select.NonKeyRestrictions
+            .FirstOrDefault(r => !indexed.Contains(r.Property.Name));
+
+        if (unindexed is not null)
+        {
+            throw new InvalidOperationException(
+                ScyllaStrings.NonKeyRestrictionNeedsFiltering(entityType.DisplayName(), unindexed.ColumnName));
+        }
+
+        // ScyllaDB will not combine more than one indexed column in a single query.
+        if (select.NonKeyRestrictions.Count > 1)
+        {
+            throw new InvalidOperationException(
+                ScyllaStrings.MultipleIndexedRestrictions(
+                    select.NonKeyRestrictions[0].ColumnName, select.NonKeyRestrictions[1].ColumnName));
+        }
     }
 
     private static void ValidateOrderings(

@@ -35,13 +35,21 @@ that names the problem and the fix.
 | You might expect | CQL reality |
 |---|---|
 | `Join`, `Include`, navigations | No joins, no foreign keys. Denormalize, or use a materialized view. |
-| `Skip(n)` | No `OFFSET`. Use cursor paging via `ToPageAsync`. |
+| `Skip(n)` | No `OFFSET`, because rows are reached by seeking rather than by counting past the ones before them. Use `ToPageAsync`. |
 | Arbitrary `Where` | Partition key by `=`/`IN`, clustering keys as a contiguous prefix. Anything else needs an index or `ALLOW FILTERING`. |
 | Arbitrary `OrderBy` | Clustering columns only, in declared order or its exact reverse. |
 | `GroupBy` | Only on a prefix of the primary key. |
 | Transactions | None. Same-partition writes batch atomically; that is the ceiling. |
 | Auto-increment keys | No sequences. Use `Guid` or `TimeUuid`, generated client-side. |
 | "0 rows affected → conflict" | Writes are blind upserts with no affected-row count. Optimistic concurrency runs on lightweight transactions instead. |
+
+## Sessions and keyspaces
+
+The driver's session is designed to be long-lived and shared, so the provider keeps one per distinct connection
+configuration and every context built on the same settings reuses it. EF Core keys its internal service provider
+the same way, and the keyspace is part of that configuration — so each keyspace gets its own service provider and
+its own session. That is fine for the handful of keyspaces an application normally uses; if you need dozens,
+build the session yourself and pass it in with the `ISession` overload.
 
 ## Async only
 
@@ -89,6 +97,26 @@ var recent = await context.Readings
     .Take(100)
     .ToListAsync();
 ```
+
+### Paging
+
+```csharp
+var page = await context.Readings
+    .Where(r => r.SensorId == sensorId)
+    .ToPageAsync(pageSize: 100, continuationToken);
+```
+
+`page.ContinuationToken` fetches the next page. It is **not signed or encrypted** — a tampered token can read
+other partitions, so sign it before handing it to an untrusted client.
+
+### Seeing the CQL
+
+```csharp
+query.ToCqlString();
+```
+
+Worth checking: in CQL the difference between a partition seek and a cluster-wide scan is which restrictions
+reached the server.
 
 ## Building and testing
 

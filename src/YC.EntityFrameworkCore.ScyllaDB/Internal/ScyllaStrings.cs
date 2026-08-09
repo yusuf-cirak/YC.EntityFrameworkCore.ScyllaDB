@@ -40,9 +40,9 @@ internal static class ScyllaStrings
     public static string NotImplementedUntilPhase(string feature, string phase)
         => $"{feature} is not implemented yet (planned for {phase}).";
 
-    public static string ProjectionsNotSupported()
-        => "Projections are not translated yet, so 'Select' must return the entity itself. Read the rows first "
-           + "and project afterwards: 'await query.ToListAsync()' then 'Select(...)'.";
+    public static string ProjectionNotTranslatable(string projection)
+        => $"The projection '{projection}' reads no mapped column, so it cannot be translated. Project "
+           + "properties of the entity, or read the rows first and project afterwards.";
 
     public static string NotTranslatable(string method)
         => $"'{method}' cannot be translated to CQL.";
@@ -112,6 +112,14 @@ internal static class ScyllaStrings
     public static string RangeNotOnLastClusteringColumn(string column, string lastRestricted)
         => $"A range comparison is only valid on the last restricted clustering column. '{column}' uses one, "
            + $"but '{lastRestricted}' is restricted after it.";
+
+    public static string IndexOnUnknownProperty(string entityType, string property)
+        => $"A secondary index on '{entityType}' names property '{property}', which is not mapped.";
+
+    public static string MultipleIndexedRestrictions(string first, string second)
+        => $"ScyllaDB uses at most one secondary index per query, but both '{first}' and '{second}' are "
+           + "restricted. Keep one and let the rest be filtered, opting in with "
+           + "'EF.Functions.AllowFiltering()'.";
 
     public static string NonKeyRestrictionNeedsFiltering(string entityType, string column)
         => $"Column '{entityType}.{column}' is not part of the primary key, so filtering on it means scanning "

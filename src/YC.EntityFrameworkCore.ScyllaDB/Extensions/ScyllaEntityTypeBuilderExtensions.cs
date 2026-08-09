@@ -133,6 +133,40 @@ public static class ScyllaEntityTypeBuilderExtensions
     }
 
     /// <summary>
+    ///     Declares a secondary index on a column, so it can be restricted without a full scan.
+    /// </summary>
+    /// <remarks>
+    ///     ScyllaDB maintains a hidden table behind the index, so one on a constantly-changing or
+    ///     high-cardinality column can cost more than the queries it saves. Only one indexed column can be used
+    ///     per query.
+    /// </remarks>
+    public static EntityTypeBuilder<TEntity> HasScyllaIndex<TEntity>(
+        this EntityTypeBuilder<TEntity> builder,
+        Expression<Func<TEntity, object?>> propertyExpression,
+        string? name = null)
+        where TEntity : class
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(propertyExpression);
+
+        var names = ScyllaExpressionHelpers.GetPropertyNames(propertyExpression);
+
+        if (names.Count != 1)
+        {
+            throw new ArgumentException(
+                "A ScyllaDB secondary index covers one column. Declare one index per column.",
+                nameof(propertyExpression));
+        }
+
+        var index = new ScyllaIndex(names[0], name);
+
+        builder.Metadata.SetScyllaIndexes(
+            [.. builder.Metadata.GetScyllaIndexes().Where(i => i.PropertyName != index.PropertyName), index]);
+
+        return builder;
+    }
+
+    /// <summary>
     ///     Makes inserts conditional on the row not already existing.
     /// </summary>
     /// <remarks>
