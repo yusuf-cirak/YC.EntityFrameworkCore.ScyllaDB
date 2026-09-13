@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup Label="Runtime">
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
     <!-- The ScyllaDB fork of the DataStax driver. Assembly name and root namespace are both
          `Cassandra`, so this package can never coexist with `CassandraCSharpDriver`. -->
     <PackageVersion Include="ScyllaDBCSharpDriver" Version="3.22.0.4" />
